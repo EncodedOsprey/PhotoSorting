@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  core-tests:
+    name: PhotoSortingCore tests (Linux)
+    runs-on: ubuntu-latest
+    container: swift:6.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests
+        working-directory: PhotoSortingCore
+        run: swift test
+
+  ios-build:
+    name: iOS app build
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate
+      - name: Build
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project PhotoSorting.xcodeproj \
+            -scheme PhotoSorting \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug \
+            build \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcbeautify

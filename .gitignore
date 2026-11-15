@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+
+# Xcode user state (the generated PhotoSorting.xcodeproj itself IS committed)
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+
+# Build output
+build/
+DerivedData/
+*.xcarchive
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Packages/
