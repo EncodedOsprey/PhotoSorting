@@ -58,6 +58,8 @@ enum PhotoLibraryService {
         let collections = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil)
         for index in 0..<collections.count {
             let collection = collections.object(at: index)
+            // Shared-album photos aren't in the user's library, so they can't be favorited or added to a new album.
+            guard collection.assetCollectionSubtype != .albumCloudShared else { continue }
             let count = imageCount(in: collection)
             guard count > 0 else { continue }
             userAlbums.append(AlbumInfo(
@@ -65,7 +67,7 @@ enum PhotoLibraryService {
                 title: collection.localizedTitle ?? "Untitled",
                 count: count,
                 kind: .user,
-                systemImage: collection.assetCollectionSubtype == .albumCloudShared ? "person.2.crop.square.stack" : "rectangle.stack",
+                systemImage: "rectangle.stack",
                 isLibrary: false
             ))
         }
