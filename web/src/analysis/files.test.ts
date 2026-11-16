@@ -19,6 +19,12 @@ describe('isProbablyImage', () => {
     }
   });
 
+  it('accepts camera RAW files the browser gave no MIME type', () => {
+    for (const name of ['DSC_0001.NEF', 'IMG_0001.CR3', 'DSC00001.ARW', 'IMG_0001.dng', 'DSCF0001.RAF']) {
+      expect(isProbablyImage(file(name)), name).toBe(true);
+    }
+  });
+
   it('rejects other files', () => {
     expect(isProbablyImage(file('clip.mov', 'video/quicktime'))).toBe(false);
     expect(isProbablyImage(file('notes.txt', 'text/plain'))).toBe(false);

@@ -19,6 +19,8 @@ There are two versions:
 
 Saving creates new copies in your Photos library. Your original photos are never changed or deleted.
 
+**RAW photos:** Safari can't open RAW files (NEF, CR2, CR3, ARW, DNG, RAF, ORF, RW2, PEF, SRW), so PhotoSorting analyzes and shows the JPEG preview that the camera stores inside each one, as photo-culling apps do. Most cameras store a full-size preview. Some older Sony, Fujifilm and Panasonic models store a smaller one, about 1,600 to 1,900 pixels wide.
+
 ## Features
 
 ### Categories
@@ -57,7 +59,7 @@ All analysis runs on your device. In the web app it runs inside Safari using Goo
 ```
 web/                      Web app (React + TypeScript + Vite PWA)
   src/core/               Platform-independent scoring and selection (port of PhotoSortingCore)
-  src/analysis/           In-browser photo analysis (MediaPipe faces, sharpness, exposure, similarity)
+  src/analysis/           In-browser photo analysis (RAW previews, MediaPipe faces, sharpness, exposure, similarity)
   src/ui/                 Screens, components and app state
   e2e/                    Playwright tests (WebKit and Chromium) and public-domain test photos
   scripts/                Asset preparation (MediaPipe WASM and face model)

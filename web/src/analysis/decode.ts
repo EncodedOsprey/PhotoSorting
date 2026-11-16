@@ -1,4 +1,5 @@
 // Decoding picked files into drawable, EXIF-oriented images.
+import { findRawPreview } from './rawPreview';
 
 /** The browser could not decode the file (unsupported format, corrupt or truncated data). */
 export class ImageDecodeError extends Error {
@@ -20,10 +21,23 @@ export interface DecodedImage {
 
 /**
  * Decodes an image file with an <img> element, which applies EXIF orientation (naturalWidth/naturalHeight and
- * drawImage() use the oriented image in Safari and Chrome) and decodes HEIC where the browser supports it.
+ * drawImage() use the oriented image in Safari and Chrome) and decodes HEIC where the browser supports it. Camera RAW
+ * files are decoded from the largest JPEG preview they embed, or as-is if that fails.
  * Rejects with ImageDecodeError when the browser can't decode the file.
  */
 export async function decodeImage(file: Blob): Promise<DecodedImage> {
+  const preview = await findRawPreview(file);
+  if (preview) {
+    try {
+      return await decodeBlob(preview.blob);
+    } catch (error) {
+      if (!(error instanceof ImageDecodeError)) throw error;
+    }
+  }
+  return decodeBlob(file);
+}
+
+async function decodeBlob(file: Blob): Promise<DecodedImage> {
   const url = URL.createObjectURL(file);
   const image = new Image();
   image.decoding = 'async';

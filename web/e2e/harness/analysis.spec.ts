@@ -1,7 +1,7 @@
 // Browser tests of the on-device analysis engine (src/analysis) via the dev-only harness page (harness.html), on
 // the fixtures described in e2e/fixtures/SOURCES.md. The assertions compare photos with each other and with the
 // selection thresholds rather than pinning exact scores, so they hold in every browser and across recalibration.
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
@@ -44,13 +44,50 @@ const DIFFERENT_PORTRAITS = allPairs(PORTRAITS);
 // No scene × group pairs: group-small-faces is composited on a blurred copy of scene-coffee (see SOURCES.md).
 const DIFFERENT_SCENES = [...allPairs(SCENES), ...allPairs(Object.keys(GROUPS))];
 
-async function openHarness(page: Page, names: readonly string[]): Promise<void> {
+interface FilePayload {
+  name: string;
+  mimeType: string;
+  buffer: Buffer;
+}
+
+/** Opens the harness with fixtures (by name) or a generated file picked. */
+async function openHarness(page: Page, files: readonly string[] | FilePayload): Promise<void> {
   await page.goto('/harness.html');
   await expect(page.locator('body')).toHaveAttribute('data-ready', 'true');
-  await page.setInputFiles(
-    '#files',
-    names.map((name) => path.join(FIXTURES_DIR, name)),
-  );
+  await page.setInputFiles('#files', 'buffer' in files ? files : files.map((name) => path.join(FIXTURES_DIR, name)));
+}
+
+/**
+ * A minimal NEF of portrait-rotated-exif6.jpg, stored the way Nikon cameras store photos: the orientation (6) in IFD0
+ * and the full-size JPEG, without EXIF, in a SubIFD. Browsers can't decode the file itself.
+ */
+function syntheticNef(): Buffer {
+  const original = readFileSync(path.join(FIXTURES_DIR, 'portrait-rotated-exif6.jpg'));
+  const segments = [original.subarray(0, 2)];
+  let at = 2;
+  for (; original[at + 1] !== 0xda; at += 2 + original.readUInt16BE(at + 2)) {
+    const segment = original.subarray(at, at + 2 + original.readUInt16BE(at + 2));
+    if (!(segment[1] === 0xe1 && segment.toString('latin1', 4, 8) === 'Exif')) segments.push(segment);
+  }
+  const jpeg = Buffer.concat([...segments, original.subarray(at)]);
+
+  const header = Buffer.alloc(72);
+  header.write('MM\0*', 0, 'latin1');
+  header.writeUInt32BE(8, 4);
+  const writeIfd = (offset: number, entries: Array<[tag: number, type: number, value: number]>) => {
+    header.writeUInt16BE(entries.length, offset);
+    entries.forEach(([tag, type, value], index) => {
+      const entry = offset + 2 + index * 12;
+      header.writeUInt16BE(tag, entry);
+      header.writeUInt16BE(type, entry + 2);
+      header.writeUInt32BE(1, entry + 4);
+      if (type === 3) header.writeUInt16BE(value, entry + 8);
+      else header.writeUInt32BE(value, entry + 8);
+    });
+  };
+  writeIfd(8, [[0x0112, 3, 6], [0x014a, 4, 40]]); // IFD0: Orientation (SHORT), SubIFDs (LONG)
+  writeIfd(40, [[0x0201, 4, 72], [0x0202, 4, jpeg.length]]); // SubIFD: JPEG offset and length
+  return Buffer.concat([header, jpeg]);
 }
 
 function analyze(page: Page, options: HarnessAnalyzeOptions = {}): Promise<HarnessResult> {
@@ -217,6 +254,16 @@ test('creates upright previews no larger than requested', async ({ page }) => {
   expect(Math.abs(small.height - 533.5)).toBeLessThanOrEqual(1);
   expect(await preview('portrait-rotated-exif6.jpg', 275)).toEqual({ width: 225, height: 275 });
   expect(await preview('scene-cat.png')).toEqual({ width: 451, height: 300 });
+});
+
+test('decodes camera RAW files from their embedded full-size JPEG, upright', async ({ page }) => {
+  await openHarness(page, { name: 'DSC_0001.NEF', mimeType: 'image/x-nikon-nef', buffer: syntheticNef() });
+  const { photos, failures } = await analyze(page);
+  expect(failures).toEqual([]);
+  expect([photos[0].width, photos[0].height]).toEqual([450, 550]);
+  expect(photos[0].faces).toHaveLength(1);
+  const preview = await page.evaluate(() => window.photoSortingHarness.preview('DSC_0001.NEF', 275));
+  expect(preview).toEqual({ width: 225, height: 275 });
 });
 
 test('stops after the current photo when cancelled', async ({ page }) => {
