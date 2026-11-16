@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4f46e5"/>
+      <stop offset="0.55" stop-color="#6d32e0"/>
+      <stop offset="1" stop-color="#b5179e"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.92" cy="0.98" r="0.75">
+      <stop offset="0" stop-color="#f472b6" stop-opacity="0.75"/>
+      <stop offset="1" stop-color="#f472b6" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="shine" cx="0.12" cy="0.02" r="0.7">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7cc4fa"/>
+      <stop offset="1" stop-color="#d9c8ff"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd84d"/>
+      <stop offset="1" stop-color="#ff9f0a"/>
+    </linearGradient>
+    <clipPath id="photo"><rect x="313" y="268" width="398" height="398" rx="14"/></clipPath>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#1b0b4d" flood-opacity="0.42"/>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" rx="228" fill="url(#bg)"/>
+  <rect width="1024" height="1024" rx="228" fill="url(#glow)"/>
+  <rect width="1024" height="1024" rx="228" fill="url(#shine)"/>
+  <g transform="translate(0 0) scale(1)">
+    <g transform="translate(-22 -18)">
+    <g filter="url(#shadow)">
+      <rect x="277" y="232" width="470" height="560" rx="40" fill="#fff" fill-opacity="0.3" transform="rotate(-13 512 512)"/>
+      <rect x="277" y="232" width="470" height="560" rx="40" fill="#fff" fill-opacity="0.55" transform="rotate(9 512 512)"/>
+      <g transform="rotate(-3 512 512)">
+        <rect x="277" y="232" width="470" height="560" rx="40" fill="#fff"/>
+        <g clip-path="url(#photo)">
+          <rect x="313" y="268" width="398" height="398" fill="url(#sky)"/>
+          <circle cx="606" cy="372" r="46" fill="#fff4c2"/>
+          <path d="M313 666 L313 560 L420 452 L520 548 L566 506 L711 640 L711 666 Z" fill="#6d5df5"/>
+          <path d="M313 666 L313 604 L392 548 L470 600 L560 560 L711 652 L711 666 Z" fill="#4338ca"/>
+        </g>
+      </g>
+    </g>
+    <g filter="url(#shadow)">
+      <circle cx="726" cy="716" r="128" fill="url(#gold)" stroke="#fff" stroke-width="22"/>
+      <polygon points="726.0,646.0 747.2,692.9 798.3,698.5 760.2,733.1 770.7,783.5 726.0,758.0 681.3,783.5 691.8,733.1 653.7,698.5 704.8,692.9" fill="#fff" stroke="#fff" stroke-width="10" stroke-linejoin="round"/>
+    </g>
+    </g>
+  </g>
+</svg>

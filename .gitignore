@@ -19,3 +19,12 @@ DerivedData/
 .build/
 .swiftpm/
 Packages/
+
+# Web app (web/)
+node_modules/
+web/dist/
+web/dev-dist/
+web/public/mediapipe/
+web/test-results/
+web/playwright-report/
+web/blob-report/

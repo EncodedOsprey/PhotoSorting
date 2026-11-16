@@ -2,7 +2,19 @@ name: CI
 
 on:
   push:
+    paths:
+      - 'PhotoSorting/**'
+      - 'PhotoSortingCore/**'
+      - 'PhotoSorting.xcodeproj/**'
+      - 'project.yml'
+      - '.github/workflows/ci.yml'
   pull_request:
+    paths:
+      - 'PhotoSorting/**'
+      - 'PhotoSortingCore/**'
+      - 'PhotoSorting.xcodeproj/**'
+      - 'project.yml'
+      - '.github/workflows/ci.yml'
 
 jobs:
   core-tests:
@@ -10,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     container: swift:6.0
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Run tests
         working-directory: PhotoSortingCore
         run: swift test
@@ -19,7 +31,7 @@ jobs:
     name: iOS app build
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate Xcode project
