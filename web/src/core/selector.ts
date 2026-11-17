@@ -1,10 +1,9 @@
 // Picks photos according to a SelectionPlan. Port of PhotoSortingCore/Sources/PhotoSortingCore/PhotoSelector.swift,
 // except that near-duplicates are detected pairwise (see selectPhotos).
-import { isEligible, scoreFor } from './scorer';
+import { hasClosedEyes, isEligible, scoreFor } from './scorer';
 import {
   BLURRY_THRESHOLD,
   CATEGORY_INFO,
-  CLOSED_EYES_THRESHOLD,
   type Candidate,
   type PhotoMetrics,
   type PhotoPick,
@@ -142,7 +141,7 @@ interface RankedCandidate {
 
 function passesHardFilters(metrics: PhotoMetrics, plan: SelectionPlan): boolean {
   if (plan.excludeBlurry && metrics.sharpness < BLURRY_THRESHOLD) return false;
-  if (plan.excludeClosedEyes && metrics.faces.some((face) => face.eyesOpen < CLOSED_EYES_THRESHOLD)) return false;
+  if (plan.excludeClosedEyes && hasClosedEyes(metrics)) return false;
   return true;
 }
 

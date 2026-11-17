@@ -19,7 +19,7 @@ export interface HarnessPhoto {
   sharpness: number;
   exposure: number;
   wholeSharpness: number;
-  faceRegionSharpness: number | null;
+  subjectSharpness: number | null;
   faces: HarnessFace[];
   detector: DetectFacesStats & { merged: number; dropped: number };
   timings: PhotoTimings;

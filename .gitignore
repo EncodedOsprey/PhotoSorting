@@ -25,6 +25,7 @@ node_modules/
 web/dist/
 web/dev-dist/
 web/public/mediapipe/
+web/public/models/*.onnx
 web/test-results/
 web/playwright-report/
 web/blob-report/

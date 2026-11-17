@@ -18,13 +18,13 @@ public enum Scorer {
         case .bestSmiles:
             guard !faces.isEmpty else { return 0 }
             let smile = 0.6 * minSmile(faces) + 0.4 * meanSmile(faces)
-            var parts: [(Double, Double)] = [(smile, 0.55), (minEyes(faces), 0.25), (sharp, 0.1)]
+            var parts: [(Double?, Double)] = [(smile, 0.55), (minEyes(faces), 0.25), (sharp, 0.1)]
             if let q = meanQuality(faces) { parts.append((q, 0.1)) }
             return weighted(parts)
 
         case .eyesOpen:
             guard !faces.isEmpty else { return 0 }
-            var parts: [(Double, Double)] = [(minEyes(faces), 0.7), (sharp, 0.15)]
+            var parts: [(Double?, Double)] = [(minEyes(faces), 0.7), (sharp, 0.15)]
             if let q = meanQuality(faces) { parts.append((q, 0.15)) }
             return weighted(parts)
 
@@ -47,7 +47,7 @@ public enum Scorer {
 
         case .portraits:
             guard !faces.isEmpty else { return 0 }
-            let quality = meanQuality(faces) ?? (meanSmile(faces) + meanEyes(faces)) / 2
+            let quality = meanQuality(faces) ?? meanEyes(faces).map { (meanSmile(faces) + $0) / 2 } ?? meanSmile(faces)
             let largest = faces.map { clamp01($0.areaFraction) }.max() ?? 0
             // Saturates around 25% of the frame.
             let sizeBonus = clamp01(largest / 0.25)
@@ -75,8 +75,11 @@ public enum Scorer {
     public static func isEligible(_ metrics: PhotoMetrics, for category: SelectionCategory) -> Bool {
         if metrics.isUtility { return false }
         switch category {
-        case .bestSmiles, .eyesOpen:
+        case .bestSmiles:
             return metrics.faceCount >= 1
+        case .eyesOpen:
+            return metrics.faceCount >= 1
+                && metrics.faces.allSatisfy { $0.eyesVisible && clamp01($0.eyesOpen) >= SelectionPlan.eyesOpenMinimum }
         case .groupShots:
             return metrics.faceCount >= 3
         case .portraits:
@@ -90,9 +93,14 @@ public enum Scorer {
         }
     }
 
+    /// Whether any face has closed eyes (the plan's "skip closed eyes" filter); hidden eyes don't count as closed.
+    public static func hasClosedEyes(_ metrics: PhotoMetrics) -> Bool {
+        metrics.faces.contains { $0.eyesVisible && $0.eyesOpen < SelectionPlan.closedEyesThreshold }
+    }
+
     /// 0...1 general quality score (used by .bestOverall).
     public static func overall(_ metrics: PhotoMetrics) -> Double {
-        var parts: [(Double, Double)] = [
+        var parts: [(Double?, Double)] = [
             (clamp01(metrics.sharpness), 0.3),
             (clamp01(metrics.exposure), 0.2),
         ]
@@ -108,11 +116,12 @@ public enum Scorer {
 
     // MARK: - Helpers
 
-    /// Weighted mean with weights renormalized over the supplied components.
-    private static func weighted(_ parts: [(value: Double, weight: Double)]) -> Double {
-        let total = parts.reduce(0) { $0 + $1.weight }
+    /// Weighted mean with weights renormalized over the available components (a nil value is left out).
+    private static func weighted(_ parts: [(value: Double?, weight: Double)]) -> Double {
+        let available = parts.compactMap { part in part.value.map { (value: $0, weight: part.weight) } }
+        let total = available.reduce(0) { $0 + $1.weight }
         guard total > 0 else { return 0 }
-        return clamp01(parts.reduce(0) { $0 + clamp01($1.value) * $1.weight } / total)
+        return clamp01(available.reduce(0) { $0 + clamp01($1.value) * $1.weight } / total)
     }
 
     private static func minSmile(_ faces: [FaceMetrics]) -> Double {
@@ -123,12 +132,15 @@ public enum Scorer {
         faces.isEmpty ? 0 : faces.reduce(0) { $0 + clamp01($1.smile) } / Double(faces.count)
     }
 
-    private static func minEyes(_ faces: [FaceMetrics]) -> Double {
-        faces.map { clamp01($0.eyesOpen) }.min() ?? 0
+    /// Weakest eyes among the faces whose eyes are visible; nil when no face's are.
+    private static func minEyes(_ faces: [FaceMetrics]) -> Double? {
+        faces.filter(\.eyesVisible).map { clamp01($0.eyesOpen) }.min()
     }
 
-    private static func meanEyes(_ faces: [FaceMetrics]) -> Double {
-        faces.isEmpty ? 0 : faces.reduce(0) { $0 + clamp01($1.eyesOpen) } / Double(faces.count)
+    /// Mean eyes over the faces whose eyes are visible; nil when no face's are.
+    private static func meanEyes(_ faces: [FaceMetrics]) -> Double? {
+        let visible = faces.filter(\.eyesVisible)
+        return visible.isEmpty ? nil : visible.reduce(0) { $0 + clamp01($1.eyesOpen) } / Double(visible.count)
     }
 
     private static func meanQuality(_ faces: [FaceMetrics]) -> Double? {

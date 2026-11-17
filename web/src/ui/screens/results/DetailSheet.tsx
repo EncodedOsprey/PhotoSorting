@@ -165,7 +165,16 @@ function Metrics({ photo, score, scoreLabel, color }: { photo: AnalyzedPhoto; sc
         <div className="metrics__face" key={index}>
           <h4>Face {index + 1}</h4>
           <MetricBar label="Smile" value={face.smile} color="#ff9500" />
-          <MetricBar label="Eyes open" value={face.eyesOpen} color="#007aff" />
+          {face.eyesVisible === false ? (
+            <div className="metric">
+              <div className="metric__top">
+                <span>Eyes</span>
+                <span className="metric__value">Hidden by sunglasses</span>
+              </div>
+            </div>
+          ) : (
+            <MetricBar label="Eyes open" value={face.eyesOpen} color="#007aff" />
+          )}
         </div>
       ))}
       {faces.length > MAX_FACES_LISTED ? (

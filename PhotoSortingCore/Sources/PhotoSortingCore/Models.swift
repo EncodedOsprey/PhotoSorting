@@ -29,7 +29,7 @@ public enum SelectionCategory: String, CaseIterable, Codable, Identifiable, Hash
     public var summary: String {
         switch self {
         case .bestSmiles: return "Everyone smiling, with eyes open."
-        case .eyesOpen: return "No blinks — every face has open eyes."
+        case .eyesOpen: return "No blinks or sunglasses — every face has open eyes."
         case .sharpest: return "Crisp focus with no motion blur."
         case .wellExposed: return "Balanced brightness, no blown highlights or crushed shadows."
         case .groupShots: return "Three or more people, all looking good."
@@ -58,14 +58,17 @@ public enum SelectionCategory: String, CaseIterable, Codable, Identifiable, Hash
 public struct FaceMetrics: Codable, Hashable, Sendable {
     public var smile: Double
     public var eyesOpen: Double
+    /// False when the eyes are hidden (sunglasses): `eyesOpen` then means nothing and is ignored.
+    public var eyesVisible: Bool
     /// Vision face capture quality (0...1); nil when unavailable.
     public var captureQuality: Double?
     /// Fraction of the image area covered by the face bounding box (0...1).
     public var areaFraction: Double
 
-    public init(smile: Double, eyesOpen: Double, captureQuality: Double? = nil, areaFraction: Double) {
+    public init(smile: Double, eyesOpen: Double, eyesVisible: Bool = true, captureQuality: Double? = nil, areaFraction: Double) {
         self.smile = smile
         self.eyesOpen = eyesOpen
+        self.eyesVisible = eyesVisible
         self.captureQuality = captureQuality
         self.areaFraction = areaFraction
     }
@@ -127,11 +130,13 @@ public struct SelectionPlan: Codable, Hashable, Sendable {
     public var avoidNearDuplicates: Bool
     /// Skip photos whose sharpness is below `SelectionPlan.blurryThreshold`.
     public var excludeBlurry: Bool
-    /// Skip photos where any face's eyesOpen is below `SelectionPlan.closedEyesThreshold`.
+    /// Skip photos where any face with visible eyes has eyesOpen below `SelectionPlan.closedEyesThreshold`.
     public var excludeClosedEyes: Bool
 
     public static let blurryThreshold = 0.25
     public static let closedEyesThreshold = 0.3
+    /// `.eyesOpen` only considers photos where every face's eyes are visible and score at least this.
+    public static let eyesOpenMinimum = 0.5
 
     public init(
         totalCount: Int,

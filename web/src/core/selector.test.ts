@@ -123,10 +123,12 @@ describe('selectPhotos', () => {
       photo(0, { sharp: 0.1 }),
       photo(1, { faces: [face({ eyesOpen: 0.1 })], sharp: 0.95 }),
       photo(2, { faces: [face({ eyesOpen: 0.9 })], sharp: 0.6 }),
+      // Sunglasses: hidden eyes don't count as closed.
+      photo(3, { faces: [face({ eyesOpen: 0.1, eyesVisible: false })], sharp: 0.5 }),
     ];
-    expect(ids(selectPhotos(candidates, plan({ totalCount: 3, excludeBlurry: true, excludeClosedEyes: true })))).toEqual([2]);
-    const lenient = plan({ totalCount: 3, excludeBlurry: false, excludeClosedEyes: false });
-    expect(selectPhotos(candidates, lenient).picks).toHaveLength(3);
+    expect(ids(selectPhotos(candidates, plan({ totalCount: 4, excludeBlurry: true, excludeClosedEyes: true })))).toEqual([2, 3]);
+    const lenient = plan({ totalCount: 4, excludeBlurry: false, excludeClosedEyes: false });
+    expect(selectPhotos(candidates, lenient).picks).toHaveLength(4);
   });
 
   it('never exceeds the total for invalid plans', () => {

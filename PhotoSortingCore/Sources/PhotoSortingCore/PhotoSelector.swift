@@ -29,9 +29,7 @@ public enum PhotoSelector {
         let passesFilters: [Bool] = candidates.map { candidate in
             let m = candidate.metrics
             if plan.excludeBlurry && m.sharpness < SelectionPlan.blurryThreshold { return false }
-            if plan.excludeClosedEyes && m.faces.contains(where: { $0.eyesOpen < SelectionPlan.closedEyesThreshold }) {
-                return false
-            }
+            if plan.excludeClosedEyes && Scorer.hasClosedEyes(m) { return false }
             return true
         }
 

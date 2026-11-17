@@ -1,31 +1,38 @@
 // The on-device photo analysis engine: decodes each picked photo, measures sharpness/exposure/similarity on a
-// small copy, finds faces with MediaPipe Face Landmarker and scores them. Photos never leave the device.
+// small copy, finds faces with MediaPipe Face Landmarker and scores them, reading eyes with small eye models.
+// Photos never leave the device.
 //
 // Per photo:  decode (EXIF-oriented) → "face image" (long edge ≤ 2048, canvas) → its RGBA pixels, from which
 //             the 512px metrics image and face crops are area-averaged in JS (identical in every browser)
-//             → sharpness, exposure, descriptor · faces (whole image + tiles) · 400px thumbnail · EXIF capture time
+//             → sharpness, exposure, descriptor · faces (whole image + tiles) → focus, eyes, sunglasses per face
+//             · 400px thumbnail · EXIF capture time
 import type { FaceLandmarker } from '@mediapipe/tasks-vision';
 import { computeDescriptor, exposureScore, laplacianVariance, sharpnessScore, toGrayscale } from '../core';
 import type { FaceMetrics } from '../core/types';
 import { canvasToJpegUrl, context2d, createCanvas, fitWithin, freeCanvas, readPixels, resizeCanvas, Resampler, type Size } from './canvas';
 import { decodeImage, ImageDecodeError, type DecodedImage } from './decode';
 import { readCaptureTime } from './exif';
+import { loadEyeModels, type EyeModels, type EyeReading } from './eyeModels';
 import {
   captureQuality,
   clamp01,
-  eyeAspectRatios,
+  eyeShapes,
   eyesOpenScore,
-  faceSharpnessScore,
   faceSizeScore,
+  focusRegions,
+  focusScale,
+  focusScore,
   frontalness,
   headPose,
+  interOcularDistance,
   smileScore,
-  FACE_SHARPNESS_WIDTH,
+  SUNGLASSES_THRESHOLD,
+  type EyeShape,
   type HeadPose,
 } from './faceScoring';
 import { detectFaces, ENGINE_LOAD_ERROR, loadFaceLandmarker, type DetectedFace, type DetectFacesStats, type TileBuffers } from './faces';
 import { fileKey } from './files';
-import { isLikelyScreenshot, regionSharpness } from './metrics';
+import { isLikelyScreenshot, photoSharpness } from './metrics';
 import { downscaleArea, pixelRect, type Pixels } from './pixels';
 import { AnalysisCancelled, createCheckpoint, yieldToEventLoop } from './scheduling';
 import { boxArea, DEFAULT_TILING, keepSubjectFaces, planTiles, type Box, type TilingOptions } from './tiling';
@@ -66,7 +73,7 @@ export interface PhotoTimings {
   metrics: number;
   /** All face-detection passes. */
   faces: number;
-  /** Per-face scores and the face-region sharpness. */
+  /** Per-face focus, eye models and scores. */
   faceMetrics: number;
   /** Thumbnail JPEG and EXIF. */
   finish: number;
@@ -81,13 +88,21 @@ export interface FaceDiagnostics {
   widthPx: number;
   smile: number;
   eyesOpen: number;
+  /** False when the face wears sunglasses (sunglasses ≥ SUNGLASSES_THRESHOLD). */
+  eyesVisible: boolean;
   captureQuality: number;
   blendshapes: Record<string, number>;
-  /** Eye aspect ratios [subject's left, right] from landmarks. */
-  eyeAspect: [number, number];
+  /** Eye shapes (aspect ratio and width) [subject's left, right] from landmarks. */
+  eyeShape: [EyeShape, EyeShape];
+  /** Eye model readings [subject's left, right]; null where the model isn't trusted (too small or blurred), so not run. */
+  eyeModel: [EyeReading | null, EyeReading | null];
+  /** Probability that the face wears sunglasses (SGC-S); null when the head crop is empty. */
+  sunglasses: number | null;
   pose: HeadPose | null;
-  sharpnessVariance: number;
-  sharpness: number;
+  /** Laplacian variance of the eye regions (see measureFocus), null when the face is too small to judge focus. */
+  sharpnessVariance: number | null;
+  /** focusScore of sharpnessVariance. */
+  sharpness: number | null;
   frontalness: number;
   size: number;
 }
@@ -99,8 +114,11 @@ export interface PhotoDiagnostics {
   height: number;
   faceImage: Size;
   wholeSharpness: number;
-  /** Sharpness of the largest face region at the metrics scale, null when too small. */
-  faceRegionSharpness: number | null;
+  /**
+   * Soft minimum of the main subjects' focus scores (see photoSharpness), which is the photo's sharpness; null when
+   * no main face can be judged (the photo's sharpness is then wholeSharpness).
+   */
+  subjectSharpness: number | null;
   detector: DetectFacesStats & { merged: number; dropped: number };
   faces: FaceDiagnostics[];
   timings: PhotoTimings;
@@ -136,24 +154,43 @@ class Workspace {
   }
 }
 
+/** The models analysis runs, loaded together. */
+interface Engine {
+  landmarker: FaceLandmarker;
+  eyes: EyeModels;
+}
+
+/** Loads the face landmarker and the eye models in parallel; nothing stays open if either fails. */
+async function loadEngine(): Promise<Engine> {
+  const eyes = loadEyeModels();
+  eyes.catch(() => undefined); // handled below; avoid unhandled-rejection noise if the landmarker fails first
+  const landmarker = await loadFaceLandmarker();
+  try {
+    return { landmarker, eyes: await eyes };
+  } catch (error) {
+    landmarker.close();
+    throw error;
+  }
+}
+
 export function createPhotoAnalyzer(options: PhotoAnalyzerOptions = {}): PhotoAnalyzer {
   const tiling = options.tiling ?? DEFAULT_TILING;
-  let landmarker: Promise<FaceLandmarker> | null = null;
+  let engine: Promise<Engine> | null = null;
   let workspace: Workspace | null = null;
   /** Bumped by close(): runs started before it stop at the next checkpoint. */
   let generation = 0;
   let queue: Promise<unknown> = Promise.resolve();
 
-  const load = (): Promise<FaceLandmarker> => {
-    if (!landmarker) {
-      const loading = loadFaceLandmarker().catch((error: unknown) => {
-        if (landmarker === loading) landmarker = null; // let Retry load again
-        console.error('Face Landmarker failed to load', error);
+  const load = (): Promise<Engine> => {
+    if (!engine) {
+      const loading = loadEngine().catch((error: unknown) => {
+        if (engine === loading) engine = null; // let Retry load again
+        console.error('Analysis engine failed to load', error);
         throw new Error(ENGINE_LOAD_ERROR, { cause: error });
       });
-      landmarker = loading;
+      engine = loading;
     }
-    return landmarker;
+    return engine;
   };
 
   const run = async (
@@ -163,7 +200,7 @@ export function createPhotoAnalyzer(options: PhotoAnalyzerOptions = {}): PhotoAn
     const outcome: AnalysisOutcome = { photos: [], failures: [], cancelled: false };
     if (signal?.aborted) return { ...outcome, cancelled: true };
     const runGeneration = generation;
-    const engine = await load();
+    const models = await load();
     const stopped = () => signal?.aborted === true || generation !== runGeneration;
     const space = (workspace ??= new Workspace());
     const checkpoint = createCheckpoint(signal, TIME_SLICE_MS);
@@ -191,7 +228,7 @@ export function createPhotoAnalyzer(options: PhotoAnalyzerOptions = {}): PhotoAn
         let current: { name: string; thumbnailUrl?: string } = { name: file.name };
         try {
           const { photo, diagnostics } = await analyzePhoto(
-            { engine, space, tiling, checkpoint },
+            { engine: models, space, tiling, checkpoint },
             file,
             order,
             decoding,
@@ -242,16 +279,16 @@ export function createPhotoAnalyzer(options: PhotoAnalyzerOptions = {}): PhotoAn
       await load();
     },
     analyze: (files, analyzeOptions = {}) => {
-      // One analysis at a time: runs share the landmarker and the canvases.
+      // One analysis at a time: runs share the models and the canvases.
       const result = queue.then(() => run(files, analyzeOptions));
       queue = result.catch(() => undefined);
       return result;
     },
     close: () => {
       generation += 1;
-      const loaded = landmarker;
-      landmarker = null;
-      loaded?.then((engine) => engine.close(), () => undefined);
+      const loaded = engine;
+      engine = null;
+      loaded?.then(({ landmarker }) => landmarker.close(), () => undefined);
       workspace?.free();
       workspace = null;
     },
@@ -259,7 +296,7 @@ export function createPhotoAnalyzer(options: PhotoAnalyzerOptions = {}): PhotoAn
 }
 
 interface PhotoContext {
-  engine: FaceLandmarker;
+  engine: Engine;
   space: Workspace;
   tiling: TilingOptions;
   checkpoint: () => Promise<void>;
@@ -309,19 +346,26 @@ async function analyzePhoto(
   // 3. Faces: whole image + tiles, merged; tiny and background faces dropped; largest first.
   const stats: DetectFacesStats = { calls: 0, raw: 0, partial: 0, passMs: [] };
   const plan = planTiles(faceSize.width, faceSize.height, tiling);
-  const detected = await detectFaces(engine, faceImage, plan, space.tileBuffers, checkpoint, stats);
+  const detected = await detectFaces(engine.landmarker, faceImage, plan, space.tileBuffers, checkpoint, stats);
   const subjects = keepSubjectFaces(detected, faceSize.width, faceSize.height).sort(
     (a, b) => boxArea(b.box) - boxArea(a.box),
   );
   const facesMs = lap();
 
-  // 4. Per-face scores; a sharp main face rescues a photo with a soft background.
+  // 4. Per-face focus, eyes and scores; the photo is as sharp as its main subjects (or the whole image without
+  //    judgeable faces).
   const toOriginal = width / faceSize.width;
-  const measured = subjects.map((face) => measureFace(faceImage, face, toOriginal));
-  const metricsScale = metricsSize.width / faceSize.width;
-  const faceRegionSharpness =
-    subjects.length > 0 ? regionSharpness(gray, metricsSize.width, metricsSize.height, scaleBox(subjects[0].box, metricsScale)) : null;
-  const sharpness = Math.max(wholeSharpness, faceRegionSharpness ?? 0);
+  const focus = subjects.map((face) => measureFocus(faceImage, face.points));
+  const { sharpness, subjectSharpness } = photoSharpness(
+    subjects.map((face, index) => ({ focus: focus[index]?.score ?? null, width: face.box.width })),
+    wholeSharpness,
+  );
+  // The eye models take several ms per face: yield between faces so big groups don't freeze the UI or Cancel.
+  const measured: { face: AnalyzedFace; diagnostics: FaceDiagnostics }[] = [];
+  for (const [index, face] of subjects.entries()) {
+    await checkpoint();
+    measured.push(measureFace(faceImage, face, engine.eyes, toOriginal, focus[index], sharpness));
+  }
   const faceMetricsMs = lap();
 
   // 5. Thumbnail (from the 512px image) and capture time.
@@ -347,9 +391,10 @@ async function analyzePhoto(
     height,
     thumbnailUrl,
     metrics: {
-      faces: faces.map(({ smile, eyesOpen, captureQuality, areaFraction }): FaceMetrics => ({
+      faces: faces.map(({ smile, eyesOpen, eyesVisible, captureQuality, areaFraction }): FaceMetrics => ({
         smile,
         eyesOpen,
+        eyesVisible,
         captureQuality,
         areaFraction,
       })),
@@ -368,7 +413,7 @@ async function analyzePhoto(
     height,
     faceImage: faceSize,
     wholeSharpness,
-    faceRegionSharpness,
+    subjectSharpness,
     detector: { ...stats, merged: detected.length, dropped: detected.length - subjects.length },
     faces: measured.map(({ diagnostics: faceDiagnostics }) => faceDiagnostics),
     timings: {
@@ -387,54 +432,83 @@ async function analyzePhoto(
 function measureFace(
   faceImage: Pixels,
   face: DetectedFace,
+  eyes: EyeModels,
   toOriginal: number,
+  focus: FocusMeasurement | null,
+  fallbackSharpness: number,
 ): { face: AnalyzedFace; diagnostics: FaceDiagnostics } {
   const box = normalizedBox(face.box, faceImage);
   const smile = smileScore(face.blendshapes);
-  const eyeAspect = eyeAspectRatios(face.points);
-  const eyesOpen = eyesOpenScore(face.blendshapes, eyeAspect);
+  const eyeShape = eyeShapes(face.points);
+  const eyeModel: [EyeReading | null, EyeReading | null] = [
+    eyes.readEye(faceImage, face.points, 'left'),
+    eyes.readEye(faceImage, face.points, 'right'),
+  ];
+  const eyesOpen = eyesOpenScore(face.blendshapes, eyeShape, eyeModel);
+  const sunglasses = eyes.sunglassesProbability(faceImage, face.points);
+  const eyesVisible = (sunglasses ?? 0) < SUNGLASSES_THRESHOLD;
   const pose = face.matrix ? headPose(face.matrix) : null;
   const frontal = pose ? frontalness(pose.offAxis) : 0.5;
-  const sharpnessVariance = faceLaplacianVariance(faceImage, face.box);
-  const sharpness = faceSharpnessScore(sharpnessVariance);
   const widthPx = face.box.width * toOriginal;
   const size = faceSizeScore(widthPx);
-  const quality = captureQuality({ sharpness, frontalness: frontal, size });
+  // A face too small to judge is taken to be as sharp as the photo.
+  const quality = captureQuality({ sharpness: focus?.score ?? fallbackSharpness, frontalness: frontal, size });
 
   const blendshapes: Record<string, number> = {};
   for (const name of DIAGNOSTIC_BLENDSHAPES) blendshapes[name] = face.blendshapes[name] ?? 0;
   return {
-    face: { box, smile, eyesOpen, captureQuality: quality, areaFraction: box.width * box.height },
+    face: { box, smile, eyesOpen, eyesVisible, captureQuality: quality, areaFraction: box.width * box.height },
     diagnostics: {
       box,
       pass: face.pass,
       widthPx,
       smile,
       eyesOpen,
+      eyesVisible,
       captureQuality: quality,
       blendshapes,
-      eyeAspect,
+      eyeShape,
+      eyeModel,
+      sunglasses,
       pose,
-      sharpnessVariance,
-      sharpness,
+      sharpnessVariance: focus?.variance ?? null,
+      sharpness: focus?.score ?? null,
       frontalness: frontal,
       size,
     },
   };
 }
 
+interface FocusMeasurement {
+  /** Laplacian variance of the eye regions. */
+  variance: number;
+  score: number;
+}
+
 /**
- * Laplacian variance of the face (landmark box) area-averaged to at most FACE_SHARPNESS_WIDTH pixels wide, so the
- * value reflects focus and motion blur rather than face size. Small faces are measured at native resolution.
+ * Focus of a face, judged on its eyes and brows only (focusRegions: no background, hair or face outline), each eye
+ * area-averaged to focusScale so the value reflects focus and motion blur rather than face size. Null when the face
+ * is too small to judge.
  */
-function faceLaplacianVariance(faceImage: Pixels, box: Box): number {
-  const rect = pixelRect(box, faceImage.width, faceImage.height);
-  if (rect.width < 8 || rect.height < 8) return 0;
-  const scale = Math.min(1, FACE_SHARPNESS_WIDTH / rect.width);
-  const width = Math.max(3, Math.round(rect.width * scale));
-  const height = Math.max(3, Math.round(rect.height * scale));
-  const rgba = downscaleArea(faceImage, rect, width, height);
-  return laplacianVariance(toGrayscale(rgba, width, height), width, height);
+function measureFocus(faceImage: Pixels, points: DetectedFace['points']): FocusMeasurement | null {
+  const interOcular = interOcularDistance(points);
+  const scale = focusScale(interOcular);
+  if (scale === null) return null;
+  let weightedVariance = 0;
+  let samples = 0;
+  for (const region of focusRegions(points)) {
+    const rect = pixelRect(region, faceImage.width, faceImage.height);
+    const width = Math.min(rect.width, Math.round(rect.width * scale));
+    const height = Math.min(rect.height, Math.round(rect.height * scale));
+    if (width < 3 || height < 3) continue;
+    const gray = toGrayscale(downscaleArea(faceImage, rect, width, height), width, height);
+    const count = (width - 2) * (height - 2);
+    weightedVariance += count * laplacianVariance(gray, width, height);
+    samples += count;
+  }
+  if (samples === 0) return null;
+  const variance = weightedVariance / samples;
+  return { variance, score: focusScore(variance, interOcular) };
 }
 
 function normalizedBox(box: Box, size: Size): NormalizedBox {
@@ -443,10 +517,6 @@ function normalizedBox(box: Box, size: Size): NormalizedBox {
   const x1 = clamp01((box.x + box.width) / size.width);
   const y1 = clamp01((box.y + box.height) / size.height);
   return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
-}
-
-function scaleBox(box: Box, scale: number): Box {
-  return { x: box.x * scale, y: box.y * scale, width: box.width * scale, height: box.height * scale };
 }
 
 function wholeRect(size: Size): Box {

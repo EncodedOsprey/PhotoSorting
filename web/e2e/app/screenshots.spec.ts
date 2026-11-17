@@ -131,8 +131,9 @@ for (const colorScheme of ['light', 'dark'] as const) {
         await route.abort();
       });
 
+      const copies = fixtureCopies(2);
       await openApp(page);
-      await choosePhotos(page, fixtureCopies(2));
+      await choosePhotos(page, copies);
       await setStepper(page, 'Total photos', 45);
       await categorySwitch(page, 'Avoid near-duplicates').click();
       await categorySwitch(page, 'Skip blurry photos').click();
@@ -148,7 +149,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await page.unroute(MODEL_URL);
       await page.getByRole('button', { name: 'Try Again' }).click();
       await expect(page.locator('[data-screen="analyzing"]')).toContainText(/minutes? left/, { timeout: RESULTS_TIMEOUT });
-      await expect(page.getByTestId('analyzing-title')).toHaveText(/^Analyzing \d+ of 54$/);
+      await expect(page.getByTestId('analyzing-title')).toHaveText(new RegExp(`^Analyzing \\d+ of ${copies.length}$`));
       await shot(page, testInfo, 'analyzing-3-progress');
 
       await expect(page.locator('[data-screen="results"]')).toBeVisible({ timeout: RESULTS_TIMEOUT });
@@ -184,7 +185,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await shot(page, testInfo, 'detail-4-alternatives');
 
       await sheet.getByRole('switch', { name: 'Keep in selection' }).click();
-      await sheet.getByRole('button', { name: 'Close' }).click();
+      await sheet.getByRole('button', { name: 'Close', exact: true }).click();
       await expect(sheet).toBeHidden();
       await expect(page.locator('li.photo-tile[data-removed]')).toHaveCount(1);
       await shot(page, testInfo, 'results-4-removed');

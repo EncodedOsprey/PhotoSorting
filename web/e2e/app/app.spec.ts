@@ -138,7 +138,7 @@ test('shows a pick up close, leaves it out, and swaps a pick for an alternative'
   await first.tile.getByRole('button').click();
   await keep.click();
   await expect(keep).toHaveAttribute('aria-checked', 'true');
-  await sheet.getByRole('button', { name: 'Close' }).click();
+  await sheet.getByRole('button', { name: 'Close', exact: true }).click();
   await expect(sheet).toBeHidden();
   await expect(first.tile).not.toHaveAttribute('data-removed');
   await expect(saveButton(page)).toHaveText('Save 10 Photos');
@@ -308,7 +308,7 @@ test('downloads a big selection as several ZIP files, each small enough for iPho
     // Every kept photo, each in exactly one of the ZIP files.
     expect(zipped.sort()).toEqual([...kept].sort());
 
-    await sheet.getByRole('button', { name: 'Close' }).click();
+    await sheet.getByRole('button', { name: 'Close', exact: true }).click();
     await expect(sheet).toBeHidden();
     await page.getByRole('button', { name: 'Download ZIP' }).click();
     await expect(rows).toHaveCount(count);

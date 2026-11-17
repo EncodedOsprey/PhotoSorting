@@ -6,7 +6,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
 import type { HarnessAnalyzeOptions, HarnessPhoto, HarnessResult, PhotoSortingHarness } from '../../src/analysis/harnessTypes';
-import { BLURRY_THRESHOLD, nearDuplicateThreshold } from '../../src/core';
+import { SMALL_EYE_WIDTH_RANGE } from '../../src/analysis/faceScoring';
+import { BLURRY_THRESHOLD, CLOSED_EYES_THRESHOLD, nearDuplicateThreshold } from '../../src/core';
 
 declare global {
   interface Window {
@@ -22,9 +23,15 @@ const PHOTOS = FIXTURES.filter((name) => name !== 'corrupt.jpg');
 
 const SMILES = ['a', 'b', 'c', 'd'].map((key) => `portrait-smile-${key}.jpg`);
 const NEUTRALS = ['a', 'b', 'c', 'd'].map((key) => `portrait-neutral-${key}.jpg`);
-const PORTRAITS = [...SMILES, ...NEUTRALS, 'portrait-astronaut.jpg'];
+/** Eyes that aren't plainly open: painted shut (mid-smile), behind sunglasses, and narrowed by a broad smile. */
+const CLOSED_EYES = 'portrait-eyes-closed.jpg';
+const SUNGLASSES = 'portrait-sunglasses.jpg';
+const NARROWED_EYES = 'portrait-smile-c.jpg';
+const PORTRAITS = [...SMILES, ...NEUTRALS, 'portrait-astronaut.jpg', CLOSED_EYES, SUNGLASSES];
 const SCENES = ['scene-cat.png', 'scene-coffee.jpg', 'scene-hubble.jpg', 'scene-rocket.jpg'];
 const GROUPS = { 'group-crowd.jpg': 10, 'group-small-faces.jpg': 6, 'group-three.jpg': 3 };
+/** Faces in each photo of more than one person (portraits have one, scenery none). */
+const FACES: Record<string, number> = { ...GROUPS, 'duo.jpg': 2, 'duo-back-focus.jpg': 2 };
 
 type Pair = [string, string];
 const allPairs = (names: string[]): Pair[] => names.flatMap((a, i) => names.slice(i + 1).map((b): Pair => [a, b]));
@@ -38,6 +45,7 @@ const SAME_MOMENT: Pair[] = [
   ['scene-coffee.jpg', 'scene-coffee-blur-strong.jpg'],
   ['portrait-neutral-a.jpg', 'portrait-neutral-a-under.jpg'],
   ['portrait-neutral-a.jpg', 'portrait-neutral-a-over.jpg'],
+  ['duo.jpg', 'duo-back-focus.jpg'],
 ];
 /** Different people in front of similar studio backdrops: the hardest case for a colour-layout descriptor. */
 const DIFFERENT_PORTRAITS = allPairs(PORTRAITS);
@@ -193,15 +201,44 @@ test('scores toothy smiles clearly above neutral expressions', () => {
   expect(Math.min(...smiles) - Math.max(...neutrals)).toBeGreaterThanOrEqual(0.25);
 });
 
-test('sees open eyes on every face', () => {
+test('sees open eyes on every other face', () => {
   for (const { name, faces } of result.photos) {
-    for (const face of faces) expect(face.eyesOpen, name).toBeGreaterThan(0.7);
+    if ([CLOSED_EYES, SUNGLASSES, NARROWED_EYES].includes(name)) continue;
+    for (const face of faces) {
+      expect(face.eyesVisible, name).toBe(true);
+      // Eyes a few pixels wide only must not pass for closed: two crowd faces, smiling narrowly behind glasses with
+      // eyes 10 px wide, score 0.3–0.5.
+      const small = Math.min(...face.eyeShape.map(({ width }) => width)) < SMALL_EYE_WIDTH_RANGE[1];
+      expect(face.eyesOpen, name).toBeGreaterThan(small ? CLOSED_EYES_THRESHOLD : 0.7);
+    }
+  }
+  const crowd = photo('group-crowd.jpg').faces;
+  expect(crowd.filter(({ eyesOpen }) => eyesOpen > 0.7).length).toBeGreaterThanOrEqual(crowd.length - 2);
+});
+
+test('tells shut, hidden and narrowed eyes from open ones', () => {
+  const [shut] = photo(CLOSED_EYES).faces;
+  expect(shut.eyesVisible).toBe(true);
+  expect(shut.eyesOpen).toBeLessThan(CLOSED_EYES_THRESHOLD);
+  expect(shut.smile).toBeGreaterThanOrEqual(0.45);
+  expect(photo(SUNGLASSES).faces[0].eyesVisible).toBe(false);
+
+  // smile-c's broad smile narrows the eyes: not closed, but less open than in the other smiles.
+  const narrowed = photo(NARROWED_EYES).faces[0].eyesOpen;
+  expect(narrowed).toBeGreaterThan(CLOSED_EYES_THRESHOLD);
+  const otherSmiles = SMILES.filter((name) => name !== NARROWED_EYES).map((name) => photo(name).faces[0].eyesOpen);
+  expect(narrowed).toBeLessThan(Math.min(...otherSmiles));
+
+  // The eye model (eyeModels.ts) runs and reads both sides: shut eyes closed, sharp open eyes open.
+  for (const reading of shut.eyeModel) expect(reading?.open).toBeLessThan(0.5);
+  for (const name of [...SMILES, ...NEUTRALS]) {
+    for (const reading of photo(name).faces[0].eyeModel) expect(reading?.open, name).toBeGreaterThan(0.9);
   }
 });
 
 test('finds every face in group photos, one per portrait and none in scenery', () => {
   for (const { name, faces } of result.photos) {
-    const expected = name in GROUPS ? GROUPS[name as keyof typeof GROUPS] : name.startsWith('scene-') ? 0 : 1;
+    const expected = FACES[name] ?? (name.startsWith('scene-') ? 0 : 1);
     expect(faces.length, name).toBe(expected);
   }
   // The crowd's faces are 2.7–3.8% of the image width.
@@ -226,9 +263,21 @@ test('measures blur and still counts a sharp face on a soft background as sharp'
   expect(faceQuality('portrait-smile-a-blur-strong.jpg')).toBeLessThan(faceQuality('portrait-smile-a-blur-mild.jpg'));
 
   const bokeh = photo('portrait-bokeh.jpg');
-  expect(bokeh.faceRegionSharpness).not.toBeNull();
-  expect(bokeh.faceRegionSharpness!).toBeGreaterThan(bokeh.wholeSharpness);
+  expect(bokeh.subjectSharpness).not.toBeNull();
+  expect(bokeh.subjectSharpness!).toBeGreaterThan(bokeh.wholeSharpness);
   expect(bokeh.sharpness).toBeGreaterThan(BLURRY_THRESHOLD);
+});
+
+test('counts soft faces in front of a sharp background as blurry (back focus)', () => {
+  const inFocus = photo('duo.jpg');
+  const backFocus = photo('duo-back-focus.jpg');
+  // The background would pass as sharp, but both people are soft, and the photo is judged by them.
+  expect(backFocus.wholeSharpness).toBeGreaterThan(BLURRY_THRESHOLD);
+  for (const face of backFocus.faces) expect(face.sharpness).toBeLessThan(BLURRY_THRESHOLD);
+  expect(backFocus.subjectSharpness).toBe(backFocus.sharpness);
+  expect(backFocus.sharpness).toBeLessThan(BLURRY_THRESHOLD);
+  expect(inFocus.sharpness).toBeGreaterThan(BLURRY_THRESHOLD);
+  expect(backFocus.sharpness).toBeLessThan(inFocus.sharpness / 2);
 });
 
 test('scores under- and over-exposed variants well below the original', () => {

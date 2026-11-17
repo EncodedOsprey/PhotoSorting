@@ -72,7 +72,7 @@ export function buildSections(plan: SelectionPlan, picks: readonly PhotoPick<unk
 /** What a category needs, used to explain shortfalls ("not enough photos with 3+ people"). */
 const SHORTFALL_NEEDS: Readonly<Record<SelectionCategory, string>> = {
   bestSmiles: 'photos with faces',
-  eyesOpen: 'photos with faces',
+  eyesOpen: "photos with everyone's eyes open",
   groupShots: 'photos with 3+ people',
   portraits: 'close-ups of one or two people',
   noPeople: 'photos without people',

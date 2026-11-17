@@ -97,13 +97,15 @@ final class PhotoSelectorTests: XCTestCase {
             photo(0, sharp: 0.1),
             photo(1, faces: [face(eyes: 0.1)], sharp: 0.95),
             photo(2, faces: [face(eyes: 0.9)], sharp: 0.6),
+            // Sunglasses: hidden eyes don't count as closed.
+            photo(3, faces: [FaceMetrics(smile: 0.8, eyesOpen: 0.1, eyesVisible: false, areaFraction: 0.05)], sharp: 0.5),
         ]
-        let plan = SelectionPlan(totalCount: 3, requests: [], excludeBlurry: true, excludeClosedEyes: true)
+        let plan = SelectionPlan(totalCount: 4, requests: [], excludeBlurry: true, excludeClosedEyes: true)
         let result = PhotoSelector.select(from: candidates, plan: plan)
-        XCTAssertEqual(result.picks.map(\.id), [2])
+        XCTAssertEqual(result.picks.map(\.id), [2, 3])
 
-        let lenient = SelectionPlan(totalCount: 3, requests: [], excludeBlurry: false, excludeClosedEyes: false)
-        XCTAssertEqual(PhotoSelector.select(from: candidates, plan: lenient).picks.count, 3)
+        let lenient = SelectionPlan(totalCount: 4, requests: [], excludeBlurry: false, excludeClosedEyes: false)
+        XCTAssertEqual(PhotoSelector.select(from: candidates, plan: lenient).picks.count, 4)
     }
 
     func testInvalidPlanNeverExceedsTotal() {

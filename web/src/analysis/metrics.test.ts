@@ -1,33 +1,40 @@
 import { describe, expect, it } from 'vitest';
-import { laplacianVariance, sharpnessScore } from '../core';
-import { isLikelyScreenshot, MIN_REGION_SIDE, padBox, regionSharpness } from './metrics';
+import { BLURRY_THRESHOLD } from '../core';
+import { isLikelyScreenshot, MAIN_SUBJECT_RATIO, photoSharpness } from './metrics';
 
-describe('padBox', () => {
-  it('grows the box on every side, snapped outwards and clipped to the image', () => {
-    expect(padBox({ x: 10.5, y: 10.25, width: 20, height: 8 }, 0.25, 100, 100)).toEqual({ x: 5, y: 8, width: 31, height: 13 });
-    expect(padBox({ x: 0, y: 95, width: 20, height: 10 }, 0.5, 100, 100)).toEqual({ x: 0, y: 90, width: 30, height: 10 });
-  });
-});
+describe('photoSharpness', () => {
+  const faces = (...focus: Array<number | null>) => focus.map((score) => ({ focus: score, width: 100 }));
 
-describe('regionSharpness', () => {
-  // A 512×384 image that is flat (out of focus) except for a finely textured "face" region.
-  const width = 512;
-  const height = 384;
-  const face = { x: 200, y: 120, width: 110, height: 130 };
-  const gray = new Uint8Array(width * height).fill(120);
-  for (let y = face.y; y < face.y + face.height; y++) {
-    for (let x = face.x; x < face.x + face.width; x++) gray[y * width + x] = (x * 7 + y * 13) % 5 === 0 ? 200 : 90;
-  }
-
-  it('scores a sharp subject on a soft background higher than the whole image', () => {
-    const whole = sharpnessScore(laplacianVariance(gray, width, height));
-    const region = regionSharpness(gray, width, height, face)!;
-    expect(region).toBeGreaterThan(whole);
-    expect(regionSharpness(gray, width, height, { x: 20, y: 20, width: 80, height: 80 })).toBe(0);
+  it('follows the people: a soft minimum of the faces that can be judged', () => {
+    expect(photoSharpness(faces(0.8), 0.3)).toEqual({ sharpness: 0.8, subjectSharpness: 0.8 });
+    const { sharpness, subjectSharpness } = photoSharpness(faces(0.8, null, 0.2), 0.9);
+    expect(sharpness).toBeCloseTo(0.6 * 0.2 + 0.4 * 0.5);
+    expect(subjectSharpness).toBe(sharpness);
   });
 
-  it('declines regions too small to judge', () => {
-    expect(regionSharpness(gray, width, height, { x: 0, y: 0, width: MIN_REGION_SIDE / 2, height: MIN_REGION_SIDE / 2 })).toBeNull();
+  it('doesn’t let a sharp background make up for soft faces', () => {
+    expect(photoSharpness(faces(0.04, 0.02), 0.8).sharpness).toBeLessThan(BLURRY_THRESHOLD);
+  });
+
+  it('judges the main subjects only: people further back may be soft', () => {
+    const couple = [
+      { focus: 0.8, width: 100 },
+      { focus: 0.8, width: 90 },
+    ];
+    const guests = [
+      { focus: 0.05, width: 40 },
+      { focus: 0.1, width: 100 * MAIN_SUBJECT_RATIO - 1 },
+    ];
+    expect(photoSharpness([...couple, ...guests], 0.3).sharpness).toBeCloseTo(0.8);
+    // A soft partner at the same distance still counts.
+    expect(photoSharpness([couple[0], { focus: 0.05, width: 100 * MAIN_SUBJECT_RATIO }], 0.9).sharpness).toBeLessThan(BLURRY_THRESHOLD);
+  });
+
+  it('falls back to the whole image without a face that can be judged', () => {
+    expect(photoSharpness([], 0.7)).toEqual({ sharpness: 0.7, subjectSharpness: null });
+    expect(photoSharpness(faces(null, null), 0.7)).toEqual({ sharpness: 0.7, subjectSharpness: null });
+    // The largest face decides who the main subjects are, even when it is too small to judge.
+    expect(photoSharpness([{ focus: null, width: 100 }, { focus: 0.1, width: 30 }], 0.7)).toEqual({ sharpness: 0.7, subjectSharpness: null });
   });
 });
 

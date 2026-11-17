@@ -13,12 +13,13 @@ other shots minutes apart), except scene-hubble.jpg, which deliberately has no E
 from __future__ import annotations
 
 import io
+import math
 import random
 import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageStat
 
 WEB = Path(__file__).resolve().parent.parent
 OUT = WEB / "e2e" / "fixtures"
@@ -149,12 +150,67 @@ def outdoor_backdrop(size: tuple[int, int], seed: int) -> Image.Image:
     return grid.resize(size, Image.Resampling.BICUBIC).filter(ImageFilter.GaussianBlur(0.01 * max(size)))
 
 
-def backdrop(source: Image.Image, size: tuple[int, int], blur_fraction: float) -> Image.Image:
-    """Covers `size` with `source` (center crop) and blurs it like an out-of-focus background."""
+def cover(source: Image.Image, size: tuple[int, int]) -> Image.Image:
+    """Covers `size` with `source`: scaled to fill, center crop."""
     scale = max(size[0] / source.width, size[1] / source.height)
     scaled = source.resize((round(source.width * scale), round(source.height * scale)), Image.Resampling.LANCZOS)
     left, top = (scaled.width - size[0]) // 2, (scaled.height - size[1]) // 2
-    return blurred(scaled.crop((left, top, left + size[0], top + size[1])), blur_fraction)
+    return scaled.crop((left, top, left + size[0], top + size[1]))
+
+
+def backdrop(source: Image.Image, size: tuple[int, int], blur_fraction: float) -> Image.Image:
+    """Covers `size` with `source` (center crop) and blurs it like an out-of-focus background."""
+    return blurred(cover(source, size), blur_fraction)
+
+
+Point = tuple[float, float]
+
+
+def sunglasses(image: Image.Image, eyes: list[tuple[Point, Point]]) -> Image.Image:
+    """Draws opaque dark sunglasses (lenses, frame, bridge, temples) over eyes given by their (outer, inner) corners."""
+    image = image.copy()
+    draw = ImageDraw.Draw(image)
+    eye_width = sum(math.dist(outer, inner) for outer, inner in eyes) / len(eyes)
+    lens_width, lens_height = 1.9 * eye_width, 1.45 * eye_width
+    frame = max(2, round(0.09 * eye_width))
+    black = (5, 5, 6)
+    lenses = []
+    for outer, inner in eyes:
+        cx, cy = (outer[0] + inner[0]) / 2, (outer[1] + inner[1]) / 2
+        lens = (cx - lens_width / 2, cy - 0.55 * lens_height, cx + lens_width / 2, cy + 0.45 * lens_height)
+        lenses.append(lens)
+        draw.rounded_rectangle(lens, radius=0.42 * lens_height, fill=(18, 20, 24), outline=black, width=frame)
+        reflection = (lens[0] + 0.15 * lens_width, lens[1] + 0.12 * lens_height, lens[2] - 0.2 * lens_width, lens[1] + 0.55 * lens_height)
+        draw.chord(reflection, 200, 300, fill=(48, 52, 60))
+    left, right = sorted(lenses, key=lambda lens: lens[0])
+    bar = sum(outer[1] + inner[1] for outer, inner in eyes) / (2 * len(eyes)) - 0.3 * lens_height
+    draw.line(((left[2] - frame, bar), (right[0] + frame, bar)), fill=black, width=frame + 1)
+    draw.line(((left[0], bar), (left[0] - 0.9 * eye_width, bar - 0.05 * eye_width)), fill=black, width=frame)
+    draw.line(((right[2], bar), (right[2] + 0.9 * eye_width, bar - 0.05 * eye_width)), fill=black, width=frame)
+    return image
+
+
+def closed_eyes(image: Image.Image, eyes: list[list[Point]]) -> Image.Image:
+    """
+    Paints eyes shut. Each eye is the outline of its opening, 16 points: the outer corner, along the lower lid to the
+    inner corner (index 8), then back along the upper lid. The opening is filled with the skin color below the eye,
+    then a lash line is drawn along the lower lid and a lid crease above it.
+    """
+    for outline in eyes:
+        outer, inner = outline[0], outline[8]
+        eye_width = math.dist(outer, inner)
+        cx, cy = (outer[0] + inner[0]) / 2, (outer[1] + inner[1]) / 2
+        cheek = (int(cx - 0.2 * eye_width), int(cy + 0.45 * eye_width), int(cx + 0.2 * eye_width), int(cy + 0.6 * eye_width))
+        skin = tuple(ImageStat.Stat(image.crop(cheek)).median)
+        mask = Image.new("L", image.size, 0)
+        ImageDraw.Draw(mask).polygon(outline, fill=255)
+        mask = mask.filter(ImageFilter.MaxFilter(5)).filter(ImageFilter.GaussianBlur(0.06 * eye_width))
+        image = Image.composite(Image.new("RGB", image.size, skin), image, mask)
+        draw = ImageDraw.Draw(image)
+        draw.line(outline[:9], fill=(40, 28, 24), width=max(2, round(0.07 * eye_width)), joint="curve")
+        crease = [outer] + [(x, y - 0.18 * eye_width) for x, y in outline[14:9:-1]] + [inner]
+        draw.line(crease, fill=tuple(max(0, c - 35) for c in skin), width=max(1, round(0.03 * eye_width)), joint="curve")
+    return image
 
 
 # --- Fixtures ---------------------------------------------------------------------------------------
@@ -172,6 +228,22 @@ def main() -> None:
     for i, (key, bioguide) in enumerate(neutrals.items()):
         save_jpeg(congress(bioguide), f"portrait-neutral-{key}.jpg", at(20 + 4 * i, 30))
     save_jpeg(skimage("astronaut.png"), "portrait-astronaut.jpg", at(37, 5))
+
+    # Eyes: sunglasses drawn over open eyes, and eyes painted shut in a smile (a blink). Eye landmarks (MediaPipe Face
+    # Landmarker, subject's left eye first) in the portraits as saved.
+    shades = congress("A000376")
+    shades = shades.resize((round(shades.width * 825 / shades.height), 825), Image.Resampling.LANCZOS)
+    corners = [((370.1, 216.8), (331.7, 216.8)), ((245.5, 211.5), (280.9, 214.6))]
+    save_jpeg(sunglasses(shades, corners), "portrait-sunglasses.jpg", at(72, 40))
+    outlines = [
+        [(455.6, 345.4), (449.9, 348.4), (444.0, 350.4), (435.9, 351.9), (424.1, 352.6), (411.4, 351.6), (399.9, 350.2),
+         (392.4, 349.4), (388.7, 348.6), (393.4, 344.1), (403.0, 337.9), (416.1, 333.7), (428.9, 333.4), (440.4, 336.0),
+         (448.1, 339.9), (452.4, 342.9)],
+        [(242.9, 345.0), (248.9, 347.4), (254.6, 349.1), (262.5, 350.8), (274.4, 351.5), (286.2, 350.6), (297.8, 349.2),
+         (305.8, 348.7), (309.1, 347.8), (304.6, 343.6), (295.0, 337.2), (282.3, 332.9), (270.2, 332.6), (258.3, 335.4),
+         (250.8, 339.2), (246.4, 342.3)],
+    ]
+    save_jpeg(closed_eyes(congress("A000374"), outlines), "portrait-eyes-closed.jpg", at(75, 10))
 
     # Scenery and details without people.
     rocket, coffee = skimage("rocket.jpg"), skimage("coffee.png")
@@ -222,6 +294,15 @@ def main() -> None:
         )
     ]
     save_jpeg(collage(outdoor_backdrop(size, seed=7), crowd), "group-crowd.jpg", at(66, 30))
+
+    # Back focus: two people in front of a sharp, detailed scene, then the same frame with the people (and only
+    # them) out of focus, as when the camera focuses on the background behind them.
+    duo = [(congress("H001062"), 0.15, 0.30, 0.25), (congress("R000601"), 0.15, 0.70, 0.22)]
+    in_focus = collage(cover(rocket, (1200, 800)), duo)
+    silhouettes = [(Image.new("RGB", portrait.size, "white"), *placement) for portrait, *placement in duo]
+    people = collage(Image.new("RGB", in_focus.size), silhouettes).convert("L")
+    save_jpeg(in_focus, "duo.jpg", at(69, 0))
+    save_jpeg(Image.composite(blurred(in_focus, 0.003), in_focus, people), "duo-back-focus.jpg", at(69, 2))
 
     # Bokeh: sharp face on a heavily blurred scene (everything but an ellipse around the face is blurred).
     person = [(congress("A000382"), 0.20, 0.5, 0.06)]

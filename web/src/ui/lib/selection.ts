@@ -1,8 +1,7 @@
 // Runs the selector over analyzed photos, and ranks alternatives for a pick in the detail sheet.
-import { createNearDuplicateChecker, isEligible, nearDuplicateThreshold, scoreFor, selectPhotos } from '../../core';
+import { createNearDuplicateChecker, hasClosedEyes, isEligible, nearDuplicateThreshold, scoreFor, selectPhotos } from '../../core';
 import {
   BLURRY_THRESHOLD,
-  CLOSED_EYES_THRESHOLD,
   type PhotoMetrics,
   type SelectionCategory,
   type SelectionPlan,
@@ -49,7 +48,7 @@ export function runSelection(photos: readonly SelectablePhoto[], plan: Selection
 /** The plan's "skip blurry" and "skip closed eyes" filters. */
 export function passesHardFilters(metrics: PhotoMetrics, plan: Pick<SelectionPlan, 'excludeBlurry' | 'excludeClosedEyes'>): boolean {
   if (plan.excludeBlurry && metrics.sharpness < BLURRY_THRESHOLD) return false;
-  if (plan.excludeClosedEyes && metrics.faces.some((face) => face.eyesOpen < CLOSED_EYES_THRESHOLD)) return false;
+  if (plan.excludeClosedEyes && hasClosedEyes(metrics)) return false;
   return true;
 }
 

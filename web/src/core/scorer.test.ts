@@ -40,6 +40,12 @@ describe('isEligible', () => {
     expect(isEligible(none, 'sharpest')).toBe(true);
   });
 
+  it('only lets Eyes Open consider photos where every face visibly has open eyes', () => {
+    expect(isEligible(photo({ faces: faces(2) }), 'eyesOpen')).toBe(true);
+    expect(isEligible(photo({ faces: [face(), face({ eyesOpen: 0.45 })] }), 'eyesOpen')).toBe(false);
+    expect(isEligible(photo({ faces: [face(), face({ eyesVisible: false })] }), 'eyesOpen')).toBe(false);
+  });
+
   it('never selects utility photos', () => {
     const utility = photo({ isUtility: true });
     for (const category of SELECTION_CATEGORIES) expect(isEligible(utility, category), category).toBe(false);
@@ -68,6 +74,16 @@ describe('scoreFor', () => {
       expect(score, category).toBeLessThanOrEqual(1);
     }
     expect(scoreFor(metrics, 'bestOverall')).toBe(overallScore(metrics));
+  });
+
+  it('leaves faces with hidden eyes out of the eye scores', () => {
+    const sunglasses = face({ eyesOpen: 0, eyesVisible: false });
+    const mixed = photo({ faces: [face(), sunglasses] });
+    for (const category of ['bestSmiles', 'groupShots', 'portraits', 'bestOverall'] as const) {
+      expect(scoreFor(mixed, category), category).toBeCloseTo(scoreFor(photo({ faces: faces(2) }), category), 12);
+    }
+    // No visible eyes at all: the eye component drops out (smile 0.8×0.55, sharpness 0.8×0.1, quality 0.7×0.1).
+    expect(scoreFor(photo({ faces: [sunglasses] }), 'bestSmiles')).toBeCloseTo(0.59 / 0.75, 12);
   });
 
   it('ranks sharpness and exposure in their own categories', () => {

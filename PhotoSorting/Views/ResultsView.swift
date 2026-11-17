@@ -327,7 +327,7 @@ extension SelectionCategory {
     var shortfallReason: String {
         switch self {
         case .bestSmiles: return "not enough photos with smiling faces"
-        case .eyesOpen: return "not enough photos with faces and open eyes"
+        case .eyesOpen: return "not enough photos with everyone's eyes open"
         case .sharpest: return "not enough sharp photos"
         case .wellExposed: return "not enough well-exposed photos"
         case .groupShots: return "not enough photos with three or more people"

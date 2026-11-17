@@ -28,8 +28,8 @@ Saving creates new copies in your Photos library. Your original photos are never
 | Category | What it looks for |
 | --- | --- |
 | Best Smiles | Everyone smiling, with eyes open |
-| Eyes Open | No blinks: every face has open eyes |
-| Sharpest Focus | Crisp focus with no motion blur |
+| Eyes Open | No blinks, half-closed eyes or sunglasses: every face has clearly open eyes |
+| Sharpest Focus | Crisp focus on the people in front (their eyes), with no motion blur |
 | Best Exposure | Balanced brightness, no blown highlights or crushed shadows |
 | Group Shots | Three or more people, all looking good |
 | Portraits | One or two people, close up, high face quality |
@@ -44,7 +44,7 @@ Saving creates new copies in your Photos library. Your original photos are never
 
 ## Privacy
 
-All analysis runs on your device. In the web app it runs inside Safari using Google's MediaPipe face landmark model and canvas-based image measurements. The site is a set of static files that includes the face model, so there is no server to send photos to and your photos never leave your iPhone.
+All analysis runs on your device. In the web app it runs inside Safari using Google's MediaPipe face landmark model, two small classifiers that tell open from closed eyes and spot sunglasses ([OCEC](https://github.com/PINTO0309/OCEC) and [SGC](https://github.com/PINTO0309/SGC), MIT), and canvas-based image measurements. The site is a set of static files that includes the models, so there is no server to send photos to and your photos never leave your iPhone.
 
 ## How selection works
 
@@ -59,10 +59,10 @@ All analysis runs on your device. In the web app it runs inside Safari using Goo
 ```
 web/                      Web app (React + TypeScript + Vite PWA)
   src/core/               Platform-independent scoring and selection (port of PhotoSortingCore)
-  src/analysis/           In-browser photo analysis (RAW previews, MediaPipe faces, sharpness, exposure, similarity)
+  src/analysis/           In-browser photo analysis (RAW previews, MediaPipe faces, eye models, sharpness, exposure, similarity)
   src/ui/                 Screens, components and app state
   e2e/                    Playwright tests (WebKit and Chromium) and public-domain test photos
-  scripts/                Asset preparation (MediaPipe WASM and face model)
+  scripts/                Asset preparation (MediaPipe WASM, face and eye models)
 PhotoSorting/             Native iOS app (SwiftUI)
 PhotoSortingCore/         Swift package with platform-independent logic, plus unit tests
 project.yml               XcodeGen project spec for the native app
@@ -77,7 +77,7 @@ Requires Node.js 24 LTS (24.15 or later).
 ```sh
 cd web
 npm ci
-npm run dev          # http://localhost:5173 (first run downloads the face model)
+npm run dev          # http://localhost:5173 (first run downloads the face and eye models)
 npm test             # unit tests (Vitest)
 npm run lint
 npm run typecheck
@@ -86,7 +86,7 @@ npm run test:e2e     # browser tests: analysis engine and app, in WebKit (iPhone
 npm run build        # production build in web/dist
 ```
 
-`npm run dev` and `npm run build` first run `scripts/prepare-assets.mjs`. It copies the MediaPipe WASM runtime into `public/mediapipe/` and downloads Google's `face_landmarker.task` model, checking it against a pinned SHA-256 hash. To work offline, set `FACE_MODEL_PATH=/path/to/face_landmarker.task`.
+`npm run dev` and `npm run build` first run `scripts/prepare-assets.mjs`. It copies the MediaPipe WASM runtime into `public/mediapipe/`, downloads Google's `face_landmarker.task` model there and the OCEC eye-state and SGC sunglasses models into `public/models/`, and checks each model against a pinned SHA-256 hash. To work offline, point `FACE_MODEL_PATH`, `EYE_MODEL_PATH` and `SUNGLASSES_MODEL_PATH` at local copies of `face_landmarker.task`, `ocec_s.onnx` and `sgc_s.onnx`.
 
 Every push to `main` that changes `web/` runs `.github/workflows/web.yml`. It runs the tests, builds the site and deploys it to GitHub Pages. This requires **Settings → Pages → Source: GitHub Actions**.
 

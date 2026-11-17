@@ -54,14 +54,22 @@ Capture times are local wall-clock times on 2025-06-14 (UTC−4).
 | `portrait-rotated-exif6.jpg` | stored 550×450, displays 450×550 | congress `L000602` | pixels rotated 90° counter-clockwise + EXIF `Orientation=6`, so it is only upright when orientation is applied | 15:01:15 |
 | `corrupt.jpg` | — | `L000602` | the first 400 bytes of a JPEG (headers only, no image data): cannot be decoded | — |
 | `group-crowd.jpg` | 1600×1067 | congress `A000358`, `B001289`, `C001068`, `D000628`, `F000474`, `H001058`, `L000550`, `M000309`, `P000523`, `T000461` on a synthetic backdrop (smooth random sky/foliage colours, seeded) | collage: ten people in two rows, faces 2.7–3.8% of the image width (the detection limit) | 15:06:30 |
+| `duo.jpg` | 1200×800 | congress `H001062`, `R000601` on a sharp `rocket.jpg` (scaled to fill, center crop) | collage: two people, faces 18–19% of the image width, all in focus | 15:09:00 |
+| `duo-back-focus.jpg` | 1200×800 | `duo.jpg` | back focus: only the two people Gaussian-blurred (radius 0.3% of the long edge), the background stays sharp | 15:09:02 |
+| `portrait-sunglasses.jpg` | 628×825 | congress `A000376`, scaled to 825 px high | opaque dark sunglasses (lenses, frame, bridge, temples) drawn over the open eyes | 15:12:40 |
+| `portrait-eyes-closed.jpg` | 675×825 | congress `A000374` | eyes painted shut mid-smile (a blink): openings filled with cheek skin colour, lash line and lid crease drawn | 15:15:10 |
 
 ## Expectations used by the tests
 
 - Smiles: `portrait-smile-*` show broad, toothy smiles; `portrait-neutral-*` closed-mouth, neutral expressions.
-- Everybody has their eyes open.
+- Eyes: everybody has their eyes open, except `portrait-eyes-closed` (shut) and `portrait-sunglasses` (hidden).
+  `portrait-smile-c`'s broad smile narrows the eyes, and two `group-crowd` faces smile narrowly behind glasses with
+  eyes only ~10 px wide: open, but less clearly so.
 - No people: `scene-*` (the cat is a cat).
 - Near-duplicate pairs: `portrait-smile-b` / `portrait-smile-b-dup`, `scene-rocket` / `scene-rocket-dup`.
-  The focus and exposure variants are also the same moment as their original.
-- Faces: `group-crowd` 10, `group-small-faces` 6, `group-three` 3, each `portrait-*` 1, `scene-*` 0.
+  The focus and exposure variants (and `duo-back-focus` of `duo`) are also the same moment as their original.
+- Faces: `group-crowd` 10, `group-small-faces` 6, `group-three` 3, `duo*` 2, each `portrait-*` 1, `scene-*` 0.
+- Focus: `portrait-bokeh` has a sharp face on a blurred background, so it is sharp; `duo-back-focus` has soft faces
+  on a sharp background (whole-image sharpness above the blurry threshold), so it is blurry, unlike `duo`.
 - `group-small-faces` and `portrait-bokeh` sit on a blurred `coffee.png`, so `group-small-faces` has a colour layout
   close to `scene-coffee` (descriptor distance ≈ 0.06). They are 5m40s apart, beyond the near-duplicate time window.

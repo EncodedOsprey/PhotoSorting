@@ -31,10 +31,10 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // Precache everything, including the ~18 MB analysis engine (public/mediapipe: WASM runtime + face model), so
-        // analysis works offline once the app has been opened online, even if no analysis ran then. Unchanged files
-        // keep their revision, so updates don't download the engine again.
-        globPatterns: ['**/*.{js,css,html,svg,png,webmanifest,wasm,task}'],
+        // Precache everything, including the ~19 MB analysis engine (public/mediapipe: WASM runtime + face model;
+        // public/models: eye models), so analysis works offline once the app has been opened online, even if no
+        // analysis ran then. Unchanged files keep their revision, so updates don't download the engine again.
+        globPatterns: ['**/*.{js,css,html,svg,png,webmanifest,wasm,task,onnx}'],
         maximumFileSizeToCacheInBytes: 24 * 1024 * 1024,
         // Control the page that installed the service worker right away, not just after a reload. Updates still wait
         // for the photographer to tap Reload.

@@ -23,7 +23,7 @@ export interface CategoryInfo {
 
 export const CATEGORY_INFO: Readonly<Record<SelectionCategory, CategoryInfo>> = {
   bestSmiles: { displayName: 'Best Smiles', summary: 'Everyone smiling, with eyes open.' },
-  eyesOpen: { displayName: 'Eyes Open', summary: 'No blinks — every face has open eyes.' },
+  eyesOpen: { displayName: 'Eyes Open', summary: 'No blinks or sunglasses — every face has open eyes.' },
   sharpest: { displayName: 'Sharpest Focus', summary: 'Crisp focus with no motion blur.' },
   wellExposed: { displayName: 'Best Exposure', summary: 'Balanced brightness, no blown highlights or crushed shadows.' },
   groupShots: { displayName: 'Group Shots', summary: 'Three or more people, all looking good.' },
@@ -36,6 +36,8 @@ export const CATEGORY_INFO: Readonly<Record<SelectionCategory, CategoryInfo>> = 
 export interface FaceMetrics {
   smile: number;
   eyesOpen: number;
+  /** False when the eyes are hidden (sunglasses): eyesOpen then means nothing and is ignored. Absent means true. */
+  eyesVisible?: boolean;
   /** Face capture quality (sharpness, pose, size of the face) 0...1; null when unavailable. */
   captureQuality: number | null;
   /** Fraction of the image area covered by the face bounding box (0...1). */
@@ -75,12 +77,14 @@ export interface SelectionPlan {
   avoidNearDuplicates: boolean;
   /** Skip photos whose sharpness is below BLURRY_THRESHOLD. */
   excludeBlurry: boolean;
-  /** Skip photos where any face's eyesOpen is below CLOSED_EYES_THRESHOLD. */
+  /** Skip photos where any face with visible eyes has eyesOpen below CLOSED_EYES_THRESHOLD. */
   excludeClosedEyes: boolean;
 }
 
 export const BLURRY_THRESHOLD = 0.25;
 export const CLOSED_EYES_THRESHOLD = 0.3;
+/** 'eyesOpen' only considers photos where every face's eyes are visible and score at least this. */
+export const EYES_OPEN_MINIMUM = 0.5;
 
 export type PlanIssue =
   | { kind: 'totalMustBePositive' }

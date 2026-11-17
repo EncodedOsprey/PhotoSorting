@@ -1,38 +1,38 @@
-// Pure photo-level measurements on grayscale buffers (no DOM; unit tested).
-import { laplacianVariance, sharpnessScore } from '../core';
-import type { Box } from './tiling';
+// Pure photo-level measurements (no DOM; unit tested).
 
-/** Box grown by `fraction` of its size on every side, snapped outwards to whole pixels and clipped to the image. */
-export function padBox(box: Box, fraction: number, width: number, height: number): Box {
-  const x0 = Math.max(0, Math.floor(box.x - box.width * fraction));
-  const y0 = Math.max(0, Math.floor(box.y - box.height * fraction));
-  const x1 = Math.min(width, Math.ceil(box.x + box.width * (1 + fraction)));
-  const y1 = Math.min(height, Math.ceil(box.y + box.height * (1 + fraction)));
-  return { x: x0, y: y0, width: Math.max(0, x1 - x0), height: Math.max(0, y1 - y0) };
+/** Weight of the softest face in the subjects' sharpness; the rest is their mean. */
+const SOFTEST_FACE_WEIGHT = 0.6;
+/**
+ * Faces narrower than this fraction of the largest face are further back than the main subjects (twice as far or
+ * more), where a shallow depth of field leaves them soft on purpose, so their focus doesn't count.
+ */
+export const MAIN_SUBJECT_RATIO = 0.5;
+
+/** A subject face: its focus score (null = too small to judge) and its width in any unit shared by all faces. */
+export interface FaceFocus {
+  focus: number | null;
+  width: number;
 }
-
-/** Copies an integer-aligned rectangle out of a row-major grayscale buffer. */
-export function cropGray(gray: Uint8Array, width: number, rect: Box): Uint8Array {
-  const out = new Uint8Array(rect.width * rect.height);
-  for (let row = 0; row < rect.height; row++) {
-    const start = (rect.y + row) * width + rect.x;
-    out.set(gray.subarray(start, start + rect.width), row * rect.width);
-  }
-  return out;
-}
-
-/** Face regions smaller than this (pixels per side, on the ~512px metrics image) are too small to judge focus. */
-export const MIN_REGION_SIDE = 48;
 
 /**
- * core sharpnessScore of a face region (box in metrics-image pixels, padded by 10%) measured on the same ~512px
- * image as the whole-photo score, i.e. at the pixel density the score is calibrated for. Null when too small.
- * Lets a sharp subject in front of a soft (bokeh) background count as a sharp photo.
+ * Photo sharpness follows the main subjects: a soft minimum of the focus scores of the faces at least
+ * MAIN_SUBJECT_RATIO as wide as the largest, so all of them must be sharp and a sharp background can't make up for
+ * soft faces. Without a judgeable main face (scenery, tiny faces) it is the whole image's sharpness and
+ * subjectSharpness is null.
  */
-export function regionSharpness(gray: Uint8Array, width: number, height: number, box: Box): number | null {
-  const rect = padBox(box, 0.1, width, height);
-  if (rect.width < MIN_REGION_SIDE || rect.height < MIN_REGION_SIDE) return null;
-  return sharpnessScore(laplacianVariance(cropGray(gray, width, rect), rect.width, rect.height));
+export function photoSharpness(
+  faces: readonly FaceFocus[],
+  wholeSharpness: number,
+): { sharpness: number; subjectSharpness: number | null } {
+  const largest = Math.max(0, ...faces.map(({ width }) => width));
+  const scores = faces
+    .filter(({ width }) => width >= MAIN_SUBJECT_RATIO * largest)
+    .map(({ focus }) => focus)
+    .filter((score): score is number => score !== null);
+  if (scores.length === 0) return { sharpness: wholeSharpness, subjectSharpness: null };
+  const mean = scores.reduce((sum, score) => sum + score, 0) / scores.length;
+  const subjectSharpness = SOFTEST_FACE_WEIGHT * Math.min(...scores) + (1 - SOFTEST_FACE_WEIGHT) * mean;
+  return { sharpness: subjectSharpness, subjectSharpness };
 }
 
 /** Screen sizes (portrait, px) of iPhones/iPads since 2014; screenshots are saved at exactly these sizes. */

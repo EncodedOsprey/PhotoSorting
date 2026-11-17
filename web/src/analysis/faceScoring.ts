@@ -1,5 +1,5 @@
-// Pure mappings from MediaPipe Face Landmarker outputs (blendshapes, landmarks, pose matrix) and pixel
-// measurements to the 0...1 FaceMetrics scores. Calibration notes are next to each constant.
+// Pure mappings from MediaPipe Face Landmarker outputs (blendshapes, landmarks, pose matrix), the eye models' outputs
+// and pixel measurements to the 0...1 FaceMetrics scores. Calibration notes are next to each constant.
 
 /** Blendshape scores by category name (MediaPipe's 52 ARKit-style names; Left/Right are the subject's sides). */
 export type Blendshapes = Readonly<Record<string, number>>;
@@ -38,63 +38,93 @@ export function smileScore(blendshapes: Blendshapes): number {
 // MARK: - Eyes
 
 /**
- * Eye openness combines two signals that fail differently:
- * - the eye aspect ratio (EAR, lid gap / eye width) of the landmark mesh, which is regressed from pixels. 300 CC0
- *   Congress portraits (all eyes open) measure ≥ 0.115 (1st percentile 0.146, median 0.247); eyelids painted shut
- *   over real portraits measure 0.04–0.09 (fixtures, 56–375 px faces).
- * - the eyeBlink blendshape, computed from the landmarks alone: open eyes read ≤ 0.4, but it misfires on small
- *   faces (0.65–0.91 on one clearly open eye whose EAR is 0.19–0.41) and shut lids often read only 0.45–0.65.
- * The EAR decides by default. Smiles (cheeks push the lower lids up) and a lowered gaze narrow open eyes to an EAR
- * of 0.06–0.12, so in that "squint context" the EAR band moves down and the blink must agree as well. Shut lids
- * also raise eyeLookDown (0.3–0.6), so the gaze only counts half.
+ * Eye openness fuses two signals that fail differently:
+ * - the eye aspect ratio (EAR, lid gap / eye width, see eyeShapes) of the landmark mesh: open eyes in CC0
+ *   Congress portraits measure 0.146 at the 1st percentile (median 0.247; smiles narrow them a little), lids painted
+ *   shut 0.03–0.12.
+ * - OCEC-S, a small CNN that reads a crop of the eye (eyeModels.ts), so it sees lids that the mesh misplaces. It is
+ *   only trusted on crops of eyes that are big enough (EYE_MODEL_WIDTH_RANGE) and sharp (EYE_MODEL_DETAIL_RANGE).
+ * Each eye scores the geometric mean of the two, the model weighted by that trust. Calibration on 253 hand-labelled
+ * eyes in CREMA-D video frames (77 open, 81 half closed, 95 closed): open vs. the rest AUC 0.963 (EAR alone 0.936);
+ * 5% of open eyes score below EYES_OPEN_MINIMUM (0.5), 49% of half-closed (EAR alone 58%) and 1% of closed eyes
+ * reach it, 4% of closed eyes reach CLOSED_EYES_THRESHOLD (0.3; EAR alone 9.5%). 1.4% of 280 open eyes in Congress
+ * portraits score below 0.5. Small eyes are judged on a lower range (SMALL_EYE_ASPECT_RANGE).
  */
-export const EYE_ASPECT_RANGE = [0.07, 0.16] as const;
-export const EYE_ASPECT_SQUINT_SHIFT = 0.04;
+export const EYE_ASPECT_RANGE = [0.12, 0.25] as const;
+/**
+ * The EAR range for eyes at most SMALL_EYE_WIDTH_RANGE[0] px wide (between the corners); it blends into
+ * EYE_ASPECT_RANGE over SMALL_EYE_WIDTH_RANGE. On small eyes the landmarks place the lids less precisely, so narrow
+ * open eyes (smiles, glasses) can measure like half-closed ones: Congress portraits shrunk until their eyes were
+ * 8–12 px wide (as in group photos) score below CLOSED_EYES_THRESHOLD with EYE_ASPECT_RANGE for 5% of faces, and
+ * with this range for 0.8%, while 99% of shut eyes (CREMA-D blinks shrunk the same way) and 72% of the hand-labelled
+ * closed eyes still do. Half-closed eyes that small mostly pass as open.
+ */
+export const SMALL_EYE_ASPECT_RANGE = [0.05, 0.15] as const;
+export const SMALL_EYE_WIDTH_RANGE = [8, 16] as const;
+/** Eye width (pixels between the corners) over which the model's weight ramps up: smaller eyes are mostly upscaled. */
+export const EYE_MODEL_WIDTH_RANGE = [12, 20] as const;
+/**
+ * cropDetail (eyeModels.ts) over which the model's weight ramps up. The model reads blurred open eyes as closed:
+ * blurred by 4 / 6 / 8% of the eye width, 18 / 47 / 75% of open eyes in Congress portraits fall below 0.5, as their
+ * detail drops from 2.6 (median; 10th percentile 2.1) to 1.8 / 1.6 / 1.5. With this ramp 7 / 7 / 10% of the fused
+ * scores do (EAR alone 4 / 6 / 10%), while closed eyes keep their detail (CREMA-D 10th percentile 2.0) and the
+ * CREMA-D results above are unchanged.
+ */
+export const EYE_MODEL_DETAIL_RANGE = [1.7, 2.1] as const;
+/** Without landmarks: eyeBlink blendshape → closed. Open eyes read ≤ 0.4, but small faces misfire. */
 export const EYE_BLINK_RANGE = [0.35, 0.75] as const;
-export const EYE_BLINK_SQUINT_SHIFT = 0.15;
-const LOOK_DOWN_CONTEXT_WEIGHT = 0.5;
+/**
+ * SGC-S probability (eyeModels.ts) at which a face counts as wearing sunglasses: its eyes aren't visible, so their
+ * openness doesn't count. On CMU face images it finds 97.5% of the faces with sunglasses and 1.6% of the others;
+ * no face in 240 Congress portraits (max 0.58) or 455 CREMA-D videos (max 0.23) reaches it.
+ */
+export const SUNGLASSES_THRESHOLD = 0.7;
 
-export interface EyeSignals {
-  /** eyeBlinkLeft/Right blendshape. */
-  blink: number;
-  /** eyeLookDownLeft/Right blendshape. */
-  lookDown: number;
-  /** Eye aspect ratio from landmarks (see eyeAspectRatios); 0 when unavailable. */
-  aspect: number;
+/** What the eye model saw (EyeReading in eyeModels.ts). */
+export interface EyeModelReading {
+  /** Probability that the eye is open. */
+  open: number;
+  /** cropDetail of the crop. */
+  detail: number;
+  /** Distance between the eye corners in pixels. */
+  width: number;
 }
 
-/** Per-eye signals, [subject's left, subject's right]. */
-export function eyeSignals(blendshapes: Blendshapes, aspects: readonly [number, number]): [EyeSignals, EyeSignals] {
-  const side = (suffix: 'Left' | 'Right', aspect: number): EyeSignals => ({
-    blink: score(blendshapes, `eyeBlink${suffix}`),
-    lookDown: score(blendshapes, `eyeLookDown${suffix}`),
-    aspect,
-  });
-  return [side('Left', aspects[0]), side('Right', aspects[1])];
+/** How far the eye model can be trusted, 0...1: on big, sharp crops only. */
+export function eyeModelTrust({ detail, width }: Pick<EyeModelReading, 'detail' | 'width'>): number {
+  return smoothstep(EYE_MODEL_WIDTH_RANGE[0], EYE_MODEL_WIDTH_RANGE[1], width) * smoothstep(EYE_MODEL_DETAIL_RANGE[0], EYE_MODEL_DETAIL_RANGE[1], detail);
 }
 
-/** 0 = neutral face, 1 = an expression that explains narrowed open eyes (broad smile or a clearly lowered gaze). */
-export function squintContext(smileRawValue: number, lookDown: number): number {
-  return Math.max(smoothstep(0.2, 0.6, smileRawValue), LOOK_DOWN_CONTEXT_WEIGHT * smoothstep(0.2, 0.6, lookDown));
+/** The EAR range (closed → open) for an eye `width` px wide: SMALL_EYE_ASPECT_RANGE blending into EYE_ASPECT_RANGE. */
+export function eyeAspectRange(width: number): [number, number] {
+  const t = smoothstep(SMALL_EYE_WIDTH_RANGE[0], SMALL_EYE_WIDTH_RANGE[1], width);
+  const blend = (small: number, big: number) => small * (1 - t) + big * t;
+  return [blend(SMALL_EYE_ASPECT_RANGE[0], EYE_ASPECT_RANGE[0]), blend(SMALL_EYE_ASPECT_RANGE[1], EYE_ASPECT_RANGE[1])];
 }
 
-/** Openness 0...1 of one eye. */
-export function eyeOpenness(eye: EyeSignals, smileRawValue: number): number {
-  const context = squintContext(smileRawValue, eye.lookDown);
-  const blinkShift = EYE_BLINK_SQUINT_SHIFT * context;
-  const blinkClosed = smoothstep(EYE_BLINK_RANGE[0] + blinkShift, EYE_BLINK_RANGE[1] + blinkShift, clamp01(eye.blink));
-  if (!(eye.aspect > 0)) return 1 - blinkClosed;
-  const aspectShift = EYE_ASPECT_SQUINT_SHIFT * context;
-  const aspectClosed = 1 - smoothstep(EYE_ASPECT_RANGE[0] - aspectShift, EYE_ASPECT_RANGE[1] - aspectShift, eye.aspect);
-  const closed = (1 - context) * aspectClosed + context * Math.sqrt(aspectClosed * blinkClosed);
-  return clamp01(1 - closed);
+/** Openness 0...1 of one eye from its landmark shape (aspect 0 = no landmarks), eyeBlink blendshape and model reading. */
+export function eyeOpenness(eye: EyeShape, blink: number, model: EyeModelReading | null): number {
+  if (!(eye.aspect > 0)) return 1 - smoothstep(EYE_BLINK_RANGE[0], EYE_BLINK_RANGE[1], clamp01(blink));
+  const [closed, open] = eyeAspectRange(eye.width);
+  const geometry = smoothstep(closed, open, eye.aspect);
+  if (!model) return geometry;
+  const weight = eyeModelTrust(model) / 2;
+  return geometry ** (1 - weight) * clamp01(model.open) ** weight;
 }
 
-/** The less open eye: a wink or a half blink counts as closed. */
-export function eyesOpenScore(blendshapes: Blendshapes, aspects: readonly [number, number]): number {
-  const smile = rawSmile(blendshapes);
-  const [left, right] = eyeSignals(blendshapes, aspects);
-  return Math.min(eyeOpenness(left, smile), eyeOpenness(right, smile));
+/**
+ * The less open eye (a wink or a half blink counts as closed), from the eye shapes and model readings, each
+ * [subject's left, subject's right].
+ */
+export function eyesOpenScore(
+  blendshapes: Blendshapes,
+  eyes: readonly [EyeShape, EyeShape],
+  readings: readonly [EyeModelReading | null, EyeModelReading | null] = [null, null],
+): number {
+  return Math.min(
+    eyeOpenness(eyes[0], score(blendshapes, 'eyeBlinkLeft'), readings[0]),
+    eyeOpenness(eyes[1], score(blendshapes, 'eyeBlinkRight'), readings[1]),
+  );
 }
 
 // MARK: - Pose
@@ -131,22 +161,99 @@ export function frontalness(offAxisDegrees: number): number {
   return 1 - clamp01((offAxisDegrees - 15) / 45);
 }
 
-// MARK: - Capture quality
-
-/** Face crops are measured at most this many pixels wide so the sharpness scale doesn't depend on face size. */
-export const FACE_SHARPNESS_WIDTH = 128;
+// MARK: - Focus
 
 /**
- * Laplacian variance of a face crop (FACE_SHARPNESS_WIDTH wide) → 0...1 as v / (v + HALF). Calibration: 300 CC0
- * Congress studio portraits measure 50 / 352 / 1225 (1st / 50th / 99th percentile) → 0.33 / 0.78 / 0.92; the
- * fixture portrait with mild Gaussian blur 62 → 0.38, strong blur 4 → 0.04.
+ * Face-mesh indices of the focus regions, per eye (subject's left, right): between the eye corners, from the top
+ * of the brow to the lower lid. Lashes, lids, iris and brows are what photographers judge focus on, and a box per
+ * eye stays inside the face when the head is turned or tilted (one band across both eyes takes in background).
  */
-export const FACE_SHARPNESS_HALF = 100;
+const FOCUS_EYES = [
+  { corners: [263, 362], lowerLid: 374, brow: [300, 293, 334, 296, 336] },
+  { corners: [33, 133], lowerLid: 145, brow: [70, 63, 105, 66, 107] },
+] as const;
+const FOCUS_POINT_COUNT = 1 + Math.max(...FOCUS_EYES.flatMap(({ corners, lowerLid, brow }) => [...corners, lowerLid, ...brow]));
+/** Face-mesh index of the middle of the upper lip's edge. */
+const UPPER_LIP = 0;
+/**
+ * Inter-ocular distance per pixel from between the eyes to the upper lip of a face seen from the front: the 5th
+ * percentile of 152 studio portraits (median 1.02), so a face only counts as turned when its eyes look clearly close.
+ */
+const EYE_LIP_RATIO = 0.89;
 
-export function faceSharpnessScore(laplacianVariance: number): number {
-  if (!Number.isFinite(laplacianVariance) || laplacianVariance <= 0) return 0;
-  return laplacianVariance / (laplacianVariance + FACE_SHARPNESS_HALF);
+/** Rectangle in the landmarks' pixel space. */
+export interface FocusRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
+
+/**
+ * Inter-ocular distance (between the midpoints of the eye corners) of the face seen from the front; 0 when landmarks
+ * are missing. Turning the head sideways shortens the distance between the eyes in the image, but not the one from
+ * the eyes to the mouth, which then stands in. Calibration (FOCUS_HALF's portraits squeezed to 87–34% of their width
+ * like heads turned 30–70°, then blurred): sharp eyes score 0.79–0.83 and a 0.1% blur 0.64–0.68 (medians; 0.81 and
+ * 0.68 facing the camera), where the eye distance alone gives 0.72–0.78 and 0.29–0.62.
+ */
+export function interOcularDistance(points: ReadonlyArray<{ x: number; y: number }>): number {
+  if (points.length < FOCUS_POINT_COUNT) return 0;
+  const [left, right] = FOCUS_EYES.map(({ corners: [outer, inner] }) => ({
+    x: (points[outer].x + points[inner].x) / 2,
+    y: (points[outer].y + points[inner].y) / 2,
+  }));
+  const lip = points[UPPER_LIP];
+  const eyeToLip = Math.hypot(lip.x - (left.x + right.x) / 2, lip.y - (left.y + right.y) / 2);
+  return Math.max(Math.hypot(left.x - right.x, left.y - right.y), EYE_LIP_RATIO * eyeToLip);
+}
+
+/** Focus regions [subject's left eye, right eye] (see FOCUS_EYES); [] when landmarks are missing. */
+export function focusRegions(points: ReadonlyArray<{ x: number; y: number }>): FocusRegion[] {
+  if (points.length < FOCUS_POINT_COUNT) return [];
+  return FOCUS_EYES.map(({ corners, lowerLid, brow }) => {
+    const xs = corners.map((index) => points[index].x);
+    const top = Math.min(...[...brow, ...corners].map((index) => points[index].y));
+    const bottom = Math.max(...[lowerLid, ...corners].map((index) => points[index].y));
+    return { x: Math.min(...xs), y: top, width: Math.max(...xs) - Math.min(...xs), height: bottom - top };
+  });
+}
+
+/**
+ * Focus regions are area-averaged so the eyes are at most this many pixels apart (inter-ocular distance), so a blur
+ * reads the same relative to any face at least this large. Calibration: at 48 px a 0.25% blur (of a portrait's long
+ * edge) separates less from sharp; at 96–128 px sharp faces vary more with JPEG and resampling.
+ */
+export const FOCUS_IOD = 64;
+
+/**
+ * Faces with eyes closer than this (face-image pixels; eye regions ~6×5 px) are too small to judge focus: below it
+ * sharp faces (5th percentile 0.59 at 12 px) start to overlap blurred ones (0.9% blur 0.37 at 12 px).
+ */
+export const FOCUS_MIN_IOD = 12;
+
+/** Scale for measuring focus (≤ 1, never upscaled); null when the face is too small to judge. */
+export function focusScale(interOcular: number): number | null {
+  if (!(interOcular >= FOCUS_MIN_IOD)) return null;
+  return Math.min(1, FOCUS_IOD / interOcular);
+}
+
+/**
+ * Laplacian variance of the focus regions at focusScale → 0...1 as v / (v + HALF). Faces smaller than FOCUS_IOD are
+ * measured at native size, where the same focus reads a higher variance (sharp eyes ×2 at 32 px, ×4 at 12 px), so
+ * HALF grows by FOCUS_IOD / IOD there. Calibration (in the browser: 150 CC0 Congress studio portraits, IOD 92–176 px,
+ * and Gaussian blurs with a radius of 0.1 / 0.25 / 0.5 / 0.9% of the long edge): sharp 1653 median → 0.81 (5th / 95th
+ * percentile 0.61 / 0.87), blurred 0.68 / 0.26 / 0.05 / 0.02 (medians); the same faces shrunk to 12–48 px read
+ * 0.75–0.79 sharp. Sharp scenery scores 0.73 / 0.83 / 0.89 (quartiles of 13 scikit-image samples, core
+ * sharpnessScore), so "Sharpest Focus" weighs portraits and scenery alike.
+ */
+export const FOCUS_HALF = 400;
+
+export function focusScore(laplacianVariance: number, interOcular: number): number {
+  if (!Number.isFinite(laplacianVariance) || laplacianVariance <= 0 || !(interOcular > 0)) return 0;
+  return laplacianVariance / (laplacianVariance + FOCUS_HALF * Math.max(1, FOCUS_IOD / interOcular));
+}
+
+// MARK: - Capture quality
 
 /** Face width in original-image pixels → 0...1 on a log scale: ≤40 px useless, ≥320 px plenty for any print. */
 export function faceSizeScore(faceWidthPixels: number): number {
@@ -167,16 +274,24 @@ const EYE_POINTS = {
   right: [33, 133, 160, 158, 144, 153],
 } as const;
 
+/** One eye's landmark geometry. */
+export interface EyeShape {
+  /** Eye aspect ratio (EAR): mean lid gap / eye width; 0 when landmarks are missing. See EYE_ASPECT_RANGE. */
+  aspect: number;
+  /** Distance between the eye corners in pixels; 0 when landmarks are missing. */
+  width: number;
+}
+
 /**
- * Eye aspect ratio (mean lid gap / eye width) per eye, [subject's left, subject's right], from landmarks in pixels
- * (x and y must share one scale). Open eyes measure ~0.15–0.34, shut lids ~0.04–0.09; 0 when landmarks are missing.
+ * EyeShape per eye, [subject's left, subject's right], from landmarks in pixels (x and y must share one scale).
  */
-export function eyeAspectRatios(points: ReadonlyArray<{ x: number; y: number }>): [number, number] {
-  const ratio = ([outer, inner, upper1, upper2, lower1, lower2]: readonly number[]): number => {
-    if (points.length <= Math.max(outer, inner, upper1, upper2, lower1, lower2)) return 0;
+export function eyeShapes(points: ReadonlyArray<{ x: number; y: number }>): [EyeShape, EyeShape] {
+  const shape = ([outer, inner, upper1, upper2, lower1, lower2]: readonly number[]): EyeShape => {
+    if (points.length <= Math.max(outer, inner, upper1, upper2, lower1, lower2)) return { aspect: 0, width: 0 };
     const distance = (a: number, b: number) => Math.hypot(points[a].x - points[b].x, points[a].y - points[b].y);
     const width = distance(outer, inner);
-    return width > 0 ? (distance(upper1, lower1) + distance(upper2, lower2)) / (2 * width) : 0;
+    if (!(width > 0)) return { aspect: 0, width: 0 };
+    return { aspect: (distance(upper1, lower1) + distance(upper2, lower2)) / (2 * width), width };
   };
-  return [ratio(EYE_POINTS.left), ratio(EYE_POINTS.right)];
+  return [shape(EYE_POINTS.left), shape(EYE_POINTS.right)];
 }

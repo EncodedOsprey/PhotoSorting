@@ -1,6 +1,6 @@
 // Per-category photo scores. Port of PhotoSortingCore/Sources/PhotoSortingCore/Scorer.swift:
 // keep the formulas, weights and thresholds identical so the native and web apps pick the same photos.
-import type { FaceMetrics, PhotoMetrics, SelectionCategory } from './types';
+import { CLOSED_EYES_THRESHOLD, EYES_OPEN_MINIMUM, type FaceMetrics, type PhotoMetrics, type SelectionCategory } from './types';
 
 /** Clamps to 0...1; non-finite values (NaN, ±Infinity) become 0. */
 export function clamp01(value: number): number {
@@ -64,7 +64,8 @@ export function scoreFor(metrics: PhotoMetrics, category: SelectionCategory): nu
 
     case 'portraits': {
       if (faces.length === 0) return 0;
-      const quality = meanQuality(faces) ?? (meanSmile(faces) + meanEyes(faces)) / 2;
+      const eyes = meanEyes(faces);
+      const quality = meanQuality(faces) ?? (eyes === null ? meanSmile(faces) : (meanSmile(faces) + eyes) / 2);
       // Saturates around 25% of the frame.
       const sizeBonus = clamp01(largestFaceArea(faces) / 0.25);
       return weighted([
@@ -97,8 +98,12 @@ export function isEligible(metrics: PhotoMetrics, category: SelectionCategory): 
 
   switch (category) {
     case 'bestSmiles':
-    case 'eyesOpen':
       return faceCount >= 1;
+    case 'eyesOpen':
+      return (
+        faceCount >= 1 &&
+        metrics.faces.every((face) => hasVisibleEyes(face) && clamp01(face.eyesOpen) >= EYES_OPEN_MINIMUM)
+      );
     case 'groupShots':
       return faceCount >= 3;
     case 'portraits': {
@@ -114,6 +119,11 @@ export function isEligible(metrics: PhotoMetrics, category: SelectionCategory): 
     case 'bestOverall':
       return true;
   }
+}
+
+/** Whether any face has closed eyes (the plan's "skip closed eyes" filter); hidden eyes don't count as closed. */
+export function hasClosedEyes(metrics: PhotoMetrics): boolean {
+  return metrics.faces.some((face) => hasVisibleEyes(face) && face.eyesOpen < CLOSED_EYES_THRESHOLD);
 }
 
 /** 0...1 general quality score (used by 'bestOverall'). */
@@ -135,13 +145,15 @@ export function overallScore(metrics: PhotoMetrics): number {
 
 // MARK: - Helpers
 
-type Part = readonly [value: number, weight: number];
+/** A score component; a null value (signal unavailable) is left out. */
+type Part = readonly [value: number | null, weight: number];
 
-/** Weighted mean with weights renormalized over the supplied components. */
+/** Weighted mean with weights renormalized over the available components. */
 function weighted(parts: readonly Part[]): number {
   let totalWeight = 0;
   let sum = 0;
   for (const [value, weight] of parts) {
+    if (value === null) continue;
     totalWeight += weight;
     sum += clamp01(value) * weight;
   }
@@ -161,12 +173,20 @@ function meanSmile(faces: readonly FaceMetrics[]): number {
   return mean(faces, (face) => face.smile);
 }
 
-function minEyes(faces: readonly FaceMetrics[]): number {
-  return minimum(faces, (face) => face.eyesOpen);
+/** Weakest eyes among the faces whose eyes are visible; null when no face's are. */
+function minEyes(faces: readonly FaceMetrics[]): number | null {
+  const visible = faces.filter(hasVisibleEyes);
+  return visible.length > 0 ? minimum(visible, (face) => face.eyesOpen) : null;
 }
 
-function meanEyes(faces: readonly FaceMetrics[]): number {
-  return mean(faces, (face) => face.eyesOpen);
+/** Mean eyes over the faces whose eyes are visible; null when no face's are. */
+function meanEyes(faces: readonly FaceMetrics[]): number | null {
+  const visible = faces.filter(hasVisibleEyes);
+  return visible.length > 0 ? mean(visible, (face) => face.eyesOpen) : null;
+}
+
+function hasVisibleEyes(face: FaceMetrics): boolean {
+  return face.eyesVisible !== false;
 }
 
 function largestFaceArea(faces: readonly FaceMetrics[]): number {

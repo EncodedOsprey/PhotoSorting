@@ -89,7 +89,7 @@ async function summarize(photo: AnalyzedPhoto): Promise<HarnessPhoto> {
     sharpness: photo.metrics.sharpness,
     exposure: photo.metrics.exposure,
     wholeSharpness: diag.wholeSharpness,
-    faceRegionSharpness: diag.faceRegionSharpness,
+    subjectSharpness: diag.subjectSharpness,
     faces: photo.faces.map((face, index) => ({
       ...diag.faces[index],
       box: face.box,
